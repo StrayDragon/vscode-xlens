@@ -51,7 +51,10 @@ export async function activate(context: vscode.ExtensionContext) {
             const filePath = path.join(repoRoot, node.relativePath);
             const currentUri = vscode.Uri.file(filePath);
             const baseBranch = getResolvedBaseBranch();
-            const baseUri = currentUri.with({ scheme: 'git', query: baseBranch });
+            const baseUri = currentUri.with({
+                scheme: 'git',
+                query: JSON.stringify({ path: filePath, ref: baseBranch }),
+            });
             const title = `${node.name} (${baseBranch} ↔ Current)`;
             vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title);
         }),

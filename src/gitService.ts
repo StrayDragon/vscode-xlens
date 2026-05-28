@@ -53,9 +53,7 @@ export async function getDiffEntries(
 ): Promise<DiffEntry[]> {
     let cmd = `git diff ${baseBranch} --name-status`;
     if (filterPrefix) {
-        cmd += ` --relative=${filterPrefix} -- ${filterPrefix}`;
-    } else {
-        cmd += ' --relative';
+        cmd += ` -- ${filterPrefix}`;
     }
 
     let output: string;
