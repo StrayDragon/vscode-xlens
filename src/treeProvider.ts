@@ -29,6 +29,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private rootNode: TreeNode | null = null;
+    private parentMap = new Map<TreeNode, TreeNode>();
 
     constructor(private repoRoot: string) {}
 
@@ -39,19 +40,26 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     clear(): void {
         this.rootNode = null;
+        this.parentMap.clear();
         this._onDidChangeTreeData.fire();
+    }
+
+    findNodeByAbsPath(absPath: string): TreeNode | undefined {
+        if (!this.rootNode) { return undefined; }
+        const rel = path.relative(this.repoRoot, absPath);
+        if (!rel) { return undefined; }
+        return this.findNodeInTree(this.rootNode, rel);
     }
 
     getTreeItem(element: TreeNode): vscode.TreeItem {
         if (element.type === 'folder') {
             const item = new vscode.TreeItem(
                 element.name,
-                vscode.TreeItemCollapsibleState.Expanded,
+                vscode.TreeItemCollapsibleState.Collapsed,
             );
             item.iconPath = vscode.ThemeIcon.Folder;
             item.resourceUri = vscode.Uri.file(path.join(this.repoRoot, element.relativePath));
             item.contextValue = 'folder';
-            // Show count of changed files in description
             const count = this.countFiles(element);
             item.description = `${count} file${count !== 1 ? 's' : ''}`;
             return item;
@@ -84,7 +92,6 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         if (!element) {
             if (!this.rootNode) { return []; }
             return Array.from(this.rootNode.children.values()).sort((a, b) => {
-                // Folders first, then files
                 if (a.type !== b.type) { return a.type === 'folder' ? -1 : 1; }
                 return a.name.localeCompare(b.name);
             });
@@ -96,12 +103,11 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
 
     getParent(element: TreeNode): TreeNode | undefined {
-        // Walk up from root to find parent — not stored, so return undefined
-        // VS Code uses this for reveal; we can implement if needed
-        return undefined;
+        return this.parentMap.get(element);
     }
 
     private buildTree(entries: DiffEntry[]): TreeNode {
+        this.parentMap.clear();
         const root: TreeNode = {
             type: 'folder',
             name: '',
@@ -118,21 +124,25 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                 const isFile = i === parts.length - 1;
 
                 if (isFile) {
-                    current.children.set(part, {
+                    const node: TreeNode = {
                         type: 'file',
                         name: part,
                         relativePath: entry.path,
                         status: entry.status,
                         children: new Map(),
-                    });
+                    };
+                    current.children.set(part, node);
+                    this.parentMap.set(node, current);
                 } else {
                     if (!current.children.has(part)) {
-                        current.children.set(part, {
+                        const folder: TreeNode = {
                             type: 'folder',
                             name: part,
                             relativePath: parts.slice(0, i + 1).join('/'),
                             children: new Map(),
-                        });
+                        };
+                        current.children.set(part, folder);
+                        this.parentMap.set(folder, current);
                     }
                     current = current.children.get(part)!;
                 }
@@ -140,6 +150,17 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         }
 
         return root;
+    }
+
+    private findNodeInTree(node: TreeNode, relPath: string): TreeNode | undefined {
+        for (const child of node.children.values()) {
+            if (child.relativePath === relPath) { return child; }
+            if (child.type === 'folder') {
+                const found = this.findNodeInTree(child, relPath);
+                if (found) { return found; }
+            }
+        }
+        return undefined;
     }
 
     private countFiles(node: TreeNode): number {

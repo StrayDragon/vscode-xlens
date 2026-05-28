@@ -1,8 +1,25 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
+import { exec } from 'child_process';
 import { GitDiffTreeProvider } from './treeProvider';
 import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch } from './gitService';
 import { TreeNode } from './types';
+
+function execAsync(command: string, cwd: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        exec(command, { cwd, maxBuffer: 10 * 1024 * 1024 }, (error: Error | null, stdout: string, stderr: string) => {
+            if (error) {
+                reject(new Error(stderr || error.message));
+                return;
+            }
+            resolve(stdout);
+        });
+    });
+}
+
+const TEMP_DIR = path.join(os.tmpdir(), 'xlens-diff');
 
 let provider: GitDiffTreeProvider | undefined;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -40,22 +57,42 @@ export async function activate(context: vscode.ExtensionContext) {
     // Initial load
     await doRefresh();
 
-    // Register commands
+    // Commands
     context.subscriptions.push(
         vscode.commands.registerCommand('gitDiffExplorer.refresh', () => doRefresh()),
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.openDiff', (node: TreeNode) => {
+        vscode.commands.registerCommand('gitDiffExplorer.openDiff', async (node: TreeNode) => {
             if (!repoRoot || node.type !== 'file') { return; }
-            const filePath = path.join(repoRoot, node.relativePath);
-            const currentUri = vscode.Uri.file(filePath);
             const baseBranch = getResolvedBaseBranch();
-            const baseUri = currentUri.with({
-                scheme: 'git',
-                query: JSON.stringify({ path: filePath, ref: baseBranch }),
-            });
-            const title = `${node.name} (${baseBranch} ↔ Current)`;
+            const currentPath = path.join(repoRoot, node.relativePath);
+
+            // Get base branch file content via git show
+            let baseContent: string;
+            try {
+                baseContent = await execAsync(
+                    `git show ${baseBranch}:${node.relativePath}`,
+                    repoRoot,
+                );
+            } catch {
+                // File doesn't exist on base branch (newly added)
+                vscode.window.showInformationMessage(
+                    `XLens: This file does not exist on ${baseBranch}. Opening current version instead.`,
+                );
+                vscode.window.showTextDocument(vscode.Uri.file(currentPath));
+                return;
+            }
+
+            // Write base content to temp file for diff
+            fs.mkdirSync(TEMP_DIR, { recursive: true });
+            const safeName = node.relativePath.replace(/[\/\\]/g, '_');
+            const tempPath = path.join(TEMP_DIR, `${baseBranch}...${safeName}`);
+            fs.writeFileSync(tempPath, baseContent);
+
+            const baseUri = vscode.Uri.file(tempPath);
+            const currentUri = vscode.Uri.file(currentPath);
+            const title = `${node.relativePath} (${baseBranch} ↔ Current)`;
             vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title);
         }),
     );
@@ -90,6 +127,18 @@ export async function activate(context: vscode.ExtensionContext) {
                 detectedBaseBranch = input.label;
                 await config.update('baseBranch', input.label, vscode.ConfigurationTarget.Global);
                 doRefresh();
+            }
+        }),
+    );
+
+    // Reveal current file in tree when editor changes
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor((editor) => {
+            if (!editor || !provider) { return; }
+            const filePath = editor.document.uri.fsPath;
+            const node = provider.findNodeByAbsPath(filePath);
+            if (node) {
+                treeView.reveal(node, { select: true, focus: false, expand: 3 }).then(undefined, () => {});
             }
         }),
     );
@@ -172,6 +221,12 @@ async function doRefresh() {
 
 export function deactivate() {
     if (refreshTimer) { clearTimeout(refreshTimer); }
+    // Clean up temp files
+    try {
+        fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+    } catch {
+        // ignore
+    }
 }
 
 // Minimal type for vscode.git extension API
