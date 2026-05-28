@@ -3,6 +3,10 @@
   "displayName": "XLens",
   "description": "Developer lens for monorepo workflows — changed files tree, diff explorer, and more",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:StrayDragon/vscode-xlens.git"
+  },
   "engines": {
     "vscode": "^1.105.1"
   },

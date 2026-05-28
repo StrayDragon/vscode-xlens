@@ -1,37 +1,33 @@
 # XLens
 
-Developer lens for monorepo workflows — changed files tree, diff explorer, and more.
+在 monorepo 子项目中工作时，只看当前目录下有变化的文件。
 
-## Features
+## 它有什么用
 
-- **Filtered tree view**: Shows only changed files relative to your current workspace folder, not the entire repo
-- **Status icons**: Visual indicators for Added (green), Modified (yellow), Deleted (red), Renamed (blue)
-- **Auto-detect base branch**: Tries master → main → develop → trunk automatically
-- **Quick file access**: Click to open file, inline diff button to compare with base branch
-- **Auto-refresh**: Tree updates automatically on file save, git state changes, or config changes
+在大型仓库中打开 `services/user-service/` 这类子文件夹时，VS Code 的源代码管理视图会显示整个仓库的变更，大部分和你无关。XLens 只显示当前工作区下的变更文件。
 
-## Usage
+树状视图直接放在 Explorer 边栏里（和 Timeline、Outline 在一起），会自动跟踪当前打开的文件并展开对应路径。点击文件可以打开，右键可以和基线分支做 diff、在文件管理器中显示，或者直接新建文件。
 
-1. Open a subfolder of a git repository (e.g., `services/user-service/`)
-2. Click the XLens icon in the Activity Bar
-3. The tree shows files changed relative to the auto-detected base branch
+## 配置
 
-## Configuration
+`gitDiffExplorer.baseBranch` 留空会自动检测（按 master → main → develop → trunk 顺序），也可以手动指定。`filterPrefix` 通常不需要管，会根据工作区相对路径自动设置。
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `xlens.baseBranch` | `""` (auto) | Base branch to compare against (empty = auto-detect) |
-| `xlens.filterPrefix` | `""` | Manual filter prefix (auto-detected from workspace path if empty) |
-| `xlens.autoRefresh` | `true` | Auto-refresh on file/git state changes |
-| `xlens.refreshDebounce` | `2000` | Debounce interval in ms for auto-refresh |
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `gitDiffExplorer.baseBranch` | `""`（自动检测） | 比较的基线分支 |
+| `gitDiffExplorer.filterPrefix` | `""` | 路径过滤前缀（通常自动检测） |
+| `gitDiffExplorer.autoRefresh` | `true` | 文件保存或 git 状态变化时自动刷新 |
+| `gitDiffExplorer.refreshDebounce` | `2000` | 自动刷新防抖间隔（毫秒） |
 
-## Commands
+## 命令
 
-- **Refresh** — Manually refresh the changed files tree
-- **Change Base Branch** — Quick pick to switch the comparison branch
-- **Open Diff** — Open diff view for a file (inline button on each row)
-- **Open File** — Open the current version of a file (default click action)
-- **Copy Relative Path** — Copy the file's relative path to clipboard
+- 刷新树视图
+- 切换基线分支
+- 打开文件、和基线分支做 diff
+- 复制相对路径
+- 在文件管理器中显示
+- 新建文件（自动创建所需目录）
+- 在 XLens 中定位当前编辑器文件
 
 ## License
 
