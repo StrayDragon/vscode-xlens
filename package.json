@@ -56,6 +56,11 @@
         "command": "gitDiffExplorer.revealInExplorer",
         "title": "Reveal in File Explorer",
         "icon": "$(file-symlink-file)"
+      },
+      {
+        "command": "gitDiffExplorer.revealActiveFile",
+        "title": "Reveal in XLens Changed Files",
+        "icon": "$(target)"
       }
     ],
     "menus": {
@@ -69,6 +74,18 @@
           "command": "gitDiffExplorer.changeBaseBranch",
           "when": "view == gitDiffExplorerView",
           "group": "navigation"
+        },
+        {
+          "command": "gitDiffExplorer.revealActiveFile",
+          "when": "view == gitDiffExplorerView",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "gitDiffExplorer.revealActiveFile",
+          "when": "gitDiffExplorerView != false",
+          "group": "1_open"
         }
       ],
       "view/item/context": [

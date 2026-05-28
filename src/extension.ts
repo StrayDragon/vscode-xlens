@@ -135,8 +135,8 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('gitDiffExplorer.newFile', async (node: TreeNode) => {
             if (!repoRoot || node.type !== 'folder') { return; }
             const fileName = await vscode.window.showInputBox({
-                prompt: 'New file name',
-                placeHolder: 'e.g. utils.ts',
+                prompt: `New file under ${node.relativePath || '/'}`,
+                placeHolder: 'e.g. utils.ts, sub/dir/file.ts',
             });
             if (!fileName) { return; }
             const filePath = path.join(repoRoot, node.relativePath, fileName);
@@ -153,6 +153,24 @@ export async function activate(context: vscode.ExtensionContext) {
             if (!repoRoot) { return; }
             const filePath = path.join(repoRoot, node.relativePath);
             vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(filePath));
+        }),
+    );
+
+    // Reveal the active editor file in XLens tree (works from editor tab context menu or command palette)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('gitDiffExplorer.revealActiveFile', async () => {
+            if (!provider || !repoRoot) { return; }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { return; }
+            const filePath = editor.document.uri.fsPath;
+            const rel = path.relative(repoRoot, filePath);
+            provider.setActivePath(rel || undefined);
+            const node = provider.findNodeByAbsPath(filePath);
+            if (node) {
+                await treeView.reveal(node, { select: true, focus: true, expand: 3 }).then(undefined, () => {});
+            } else {
+                vscode.window.showInformationMessage('XLens: File not found in changed files.');
+            }
         }),
     );
 
