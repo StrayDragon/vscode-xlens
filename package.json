@@ -1,0 +1,140 @@
+{
+  "name": "vscode-xlens",
+  "displayName": "Git Diff Explorer",
+  "description": "Tree view of changed files filtered to current workspace path in monorepos",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.105.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:gitDiffExplorerView"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitDiffExplorer",
+          "title": "Git Diff Explorer",
+          "icon": "resources/diff-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitDiffExplorer": [
+        {
+          "id": "gitDiffExplorerView",
+          "name": "Changed Files"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitDiffExplorer.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitDiffExplorer.openDiff",
+        "title": "Open Diff"
+      },
+      {
+        "command": "gitDiffExplorer.openFile",
+        "title": "Open File"
+      },
+      {
+        "command": "gitDiffExplorer.copyPath",
+        "title": "Copy Relative Path"
+      },
+      {
+        "command": "gitDiffExplorer.changeBaseBranch",
+        "title": "Change Base Branch",
+        "icon": "$(git-branch)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitDiffExplorer.refresh",
+          "when": "view == gitDiffExplorerView",
+          "group": "navigation"
+        },
+        {
+          "command": "gitDiffExplorer.changeBaseBranch",
+          "when": "view == gitDiffExplorerView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitDiffExplorer.openDiff",
+          "when": "view == gitDiffExplorerView && viewItem =~ /^file_/",
+          "group": "inline"
+        },
+        {
+          "command": "gitDiffExplorer.openFile",
+          "when": "view == gitDiffExplorerView && viewItem =~ /^file_/",
+          "group": "1_open"
+        },
+        {
+          "command": "gitDiffExplorer.copyPath",
+          "when": "view == gitDiffExplorerView",
+          "group": "2_copy"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Git Diff Explorer",
+      "properties": {
+        "gitDiffExplorer.baseBranch": {
+          "type": "string",
+          "default": "master",
+          "description": "Base branch to compare against (e.g. master, main, develop)"
+        },
+        "gitDiffExplorer.filterPrefix": {
+          "type": "string",
+          "default": "",
+          "description": "Manual filter prefix. Leave empty to auto-detect from workspace folder path relative to git root."
+        },
+        "gitDiffExplorer.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh when files change or git state updates"
+        },
+        "gitDiffExplorer.refreshDebounce": {
+          "type": "number",
+          "default": 2000,
+          "description": "Debounce interval in milliseconds for auto-refresh"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run package",
+    "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.105.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@vscode/vsce": "^3.7.1",
+    "typescript-eslint": "^8.48.1",
+    "eslint": "^9.39.1",
+    "esbuild": "^0.27.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3"
+  }
+}
