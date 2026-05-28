@@ -14,20 +14,12 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "gitDiffExplorer",
-          "title": "XLens",
-          "icon": "resources/diff-icon.svg"
-        }
-      ]
-    },
     "views": {
-      "gitDiffExplorer": [
+      "explorer": [
         {
           "id": "gitDiffExplorerView",
-          "name": "Changed Files"
+          "name": "XLens: Changed Files",
+          "icon": "resources/diff-icon.svg"
         }
       ]
     },
