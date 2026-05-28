@@ -84,7 +84,6 @@
       "editor/title/context": [
         {
           "command": "gitDiffExplorer.revealActiveFile",
-          "when": "gitDiffExplorerView != false",
           "group": "1_open"
         }
       ],
