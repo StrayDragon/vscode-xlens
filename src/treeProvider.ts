@@ -30,6 +30,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     private rootNode: TreeNode | null = null;
     private parentMap = new Map<TreeNode, TreeNode>();
+    private activePath: string | undefined;
 
     constructor(private repoRoot: string) {}
 
@@ -41,6 +42,13 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     clear(): void {
         this.rootNode = null;
         this.parentMap.clear();
+        this.activePath = undefined;
+        this._onDidChangeTreeData.fire();
+    }
+
+    setActivePath(relPath: string | undefined): void {
+        if (this.activePath === relPath) { return; }
+        this.activePath = relPath;
         this._onDidChangeTreeData.fire();
     }
 
@@ -53,9 +61,14 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     getTreeItem(element: TreeNode): vscode.TreeItem {
         if (element.type === 'folder') {
+            const isOnActivePath = this.activePath !== undefined &&
+                (this.activePath.startsWith(element.relativePath + '/') ||
+                 this.activePath === element.relativePath);
             const item = new vscode.TreeItem(
                 element.name,
-                vscode.TreeItemCollapsibleState.Collapsed,
+                isOnActivePath
+                    ? vscode.TreeItemCollapsibleState.Expanded
+                    : vscode.TreeItemCollapsibleState.Collapsed,
             );
             item.iconPath = vscode.ThemeIcon.Folder;
             item.resourceUri = vscode.Uri.file(path.join(this.repoRoot, element.relativePath));

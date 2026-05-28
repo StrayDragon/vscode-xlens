@@ -46,6 +46,16 @@
         "command": "gitDiffExplorer.changeBaseBranch",
         "title": "Change Base Branch",
         "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitDiffExplorer.newFile",
+        "title": "New File",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "gitDiffExplorer.revealInExplorer",
+        "title": "Reveal in File Explorer",
+        "icon": "$(file-symlink-file)"
       }
     ],
     "menus": {
@@ -73,9 +83,19 @@
           "group": "1_open"
         },
         {
+          "command": "gitDiffExplorer.newFile",
+          "when": "view == gitDiffExplorerView && viewItem == folder",
+          "group": "1_open"
+        },
+        {
+          "command": "gitDiffExplorer.revealInExplorer",
+          "when": "view == gitDiffExplorerView",
+          "group": "2_nav"
+        },
+        {
           "command": "gitDiffExplorer.copyPath",
           "when": "view == gitDiffExplorerView",
-          "group": "2_copy"
+          "group": "3_copy"
         }
       ]
     },
@@ -101,6 +121,11 @@
           "type": "number",
           "default": 2000,
           "description": "Debounce interval in milliseconds for auto-refresh"
+        },
+        "gitDiffExplorer.autoReveal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-reveal and expand the current editor file in the tree"
         }
       }
     }

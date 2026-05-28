@@ -131,11 +131,40 @@ export async function activate(context: vscode.ExtensionContext) {
         }),
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('gitDiffExplorer.newFile', async (node: TreeNode) => {
+            if (!repoRoot || node.type !== 'folder') { return; }
+            const fileName = await vscode.window.showInputBox({
+                prompt: 'New file name',
+                placeHolder: 'e.g. utils.ts',
+            });
+            if (!fileName) { return; }
+            const filePath = path.join(repoRoot, node.relativePath, fileName);
+            const dir = path.dirname(filePath);
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(filePath, '');
+            await vscode.window.showTextDocument(vscode.Uri.file(filePath));
+            scheduleRefresh();
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('gitDiffExplorer.revealInExplorer', (node: TreeNode) => {
+            if (!repoRoot) { return; }
+            const filePath = path.join(repoRoot, node.relativePath);
+            vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(filePath));
+        }),
+    );
+
     // Reveal current file in tree when editor changes
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor((editor) => {
-            if (!editor || !provider) { return; }
+            if (!editor || !provider || !repoRoot) { return; }
+            const config = vscode.workspace.getConfiguration('gitDiffExplorer');
+            if (!config.get<boolean>('autoReveal', true)) { return; }
             const filePath = editor.document.uri.fsPath;
+            const rel = path.relative(repoRoot, filePath);
+            provider.setActivePath(rel || undefined);
             const node = provider.findNodeByAbsPath(filePath);
             if (node) {
                 treeView.reveal(node, { select: true, focus: false, expand: 3 }).then(undefined, () => {});
