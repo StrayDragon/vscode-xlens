@@ -72,8 +72,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.contextValue = `file_${status.toLowerCase()}`;
 
         item.command = {
-            command: 'gitDiffExplorer.openDiff',
-            title: 'Open Diff',
+            command: 'gitDiffExplorer.openFile',
+            title: 'Open File',
             arguments: [element],
         };
 

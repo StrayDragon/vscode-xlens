@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitDiffTreeProvider } from './treeProvider';
-import { getGitRepoRoot, getFilterPrefix, getDiffEntries } from './gitService';
+import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch } from './gitService';
 import { TreeNode } from './types';
 
 let provider: GitDiffTreeProvider | undefined;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let repoRoot: string | undefined;
+let detectedBaseBranch: string | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -25,6 +26,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     provider = new GitDiffTreeProvider(repoRoot);
+
+    // Auto-detect base branch (master → main → develop → trunk)
+    detectedBaseBranch = await detectBaseBranch(repoRoot);
 
     const treeView = vscode.window.createTreeView('gitDiffExplorerView', {
         treeDataProvider: provider,
@@ -46,8 +50,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (!repoRoot || node.type !== 'file') { return; }
             const filePath = path.join(repoRoot, node.relativePath);
             const currentUri = vscode.Uri.file(filePath);
-            const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-            const baseBranch = config.get<string>('baseBranch', 'master');
+            const baseBranch = getResolvedBaseBranch();
             const baseUri = currentUri.with({ scheme: 'git', query: baseBranch });
             const title = `${node.name} (${baseBranch} ↔ Current)`;
             vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title);
@@ -72,14 +75,18 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('gitDiffExplorer.changeBaseBranch', async () => {
             const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-            const current = config.get<string>('baseBranch', 'master');
-            const input = await vscode.window.showInputBox({
-                prompt: 'Enter the base branch name',
-                value: current,
-                placeHolder: 'master, main, develop...',
+            const current = getResolvedBaseBranch();
+            const picks = ['master', 'main', 'develop', 'trunk'].map(b => ({
+                label: b,
+                description: b === current ? '$(check) current' : '',
+            }));
+            const input = await vscode.window.showQuickPick(picks, {
+                placeHolder: `Current: ${current}. Select base branch...`,
             });
-            if (input && input !== current) {
-                await config.update('baseBranch', input, vscode.ConfigurationTarget.Global);
+            if (input && input.label !== current) {
+                detectedBaseBranch = input.label;
+                await config.update('baseBranch', input.label, vscode.ConfigurationTarget.Global);
+                doRefresh();
             }
         }),
     );
@@ -122,6 +129,12 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 }
 
+function getResolvedBaseBranch(): string {
+    const config = vscode.workspace.getConfiguration('gitDiffExplorer');
+    const configBranch = config.get<string>('baseBranch', '');
+    return configBranch || detectedBaseBranch || 'master';
+}
+
 function scheduleRefresh() {
     const config = vscode.workspace.getConfiguration('gitDiffExplorer');
     if (!config.get<boolean>('autoRefresh', true)) { return; }
@@ -135,7 +148,7 @@ async function doRefresh() {
     if (!provider || !repoRoot) { return; }
 
     const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-    const baseBranch = config.get<string>('baseBranch', 'master');
+    const baseBranch = getResolvedBaseBranch();
     const manualPrefix = config.get<string>('filterPrefix', '');
 
     const workspaceFolders = vscode.workspace.workspaceFolders;

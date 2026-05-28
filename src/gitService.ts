@@ -18,6 +18,19 @@ export async function getGitRepoRoot(workspacePath: string): Promise<string> {
     return execAsync('git rev-parse --show-toplevel', workspacePath);
 }
 
+export async function detectBaseBranch(repoRoot: string): Promise<string> {
+    const candidates = ['master', 'main', 'develop', 'trunk'];
+    for (const branch of candidates) {
+        try {
+            await execAsync(`git rev-parse --verify ${branch}`, repoRoot);
+            return branch;
+        } catch {
+            continue;
+        }
+    }
+    return 'master';
+}
+
 export function getFilterPrefix(
     workspacePath: string,
     repoRoot: string,

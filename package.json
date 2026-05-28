@@ -39,7 +39,8 @@
       },
       {
         "command": "gitDiffExplorer.openDiff",
-        "title": "Open Diff"
+        "title": "Open Diff",
+        "icon": "$(diff)"
       },
       {
         "command": "gitDiffExplorer.openFile",
@@ -91,8 +92,8 @@
       "properties": {
         "gitDiffExplorer.baseBranch": {
           "type": "string",
-          "default": "master",
-          "description": "Base branch to compare against (e.g. master, main, develop)"
+          "default": "",
+          "description": "Base branch to compare against. Leave empty to auto-detect (tries master → main → develop → trunk)."
         },
         "gitDiffExplorer.filterPrefix": {
           "type": "string",
