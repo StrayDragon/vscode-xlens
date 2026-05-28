@@ -1,8 +1,8 @@
 import * as path from 'path';
 import { exec } from 'child_process';
-import { DiffEntry, GitFileStatus } from './types';
+import { DiffEntry, GitFileStatus, VALID_STATUSES } from './types';
 
-function execAsync(command: string, cwd: string): Promise<string> {
+export function execAsync(command: string, cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
         exec(command, { cwd, maxBuffer: 10 * 1024 * 1024 }, (error: Error | null, stdout: string, stderr: string) => {
             if (error) {
@@ -12,6 +12,12 @@ function execAsync(command: string, cwd: string): Promise<string> {
             resolve(stdout.trim());
         });
     });
+}
+
+const SAFE_BRANCH_RE = /^[a-zA-Z0-9._\-\/]+$/;
+
+export function isValidBranchName(branch: string): boolean {
+    return SAFE_BRANCH_RE.test(branch) && !branch.includes('..');
 }
 
 export async function getGitRepoRoot(workspacePath: string): Promise<string> {
@@ -46,23 +52,29 @@ export function getFilterPrefix(
     return '';
 }
 
+function parseGitStatus(raw: string): GitFileStatus | undefined {
+    const ch = raw.charAt(0);
+    if (VALID_STATUSES.has(ch)) {
+        return ch as GitFileStatus;
+    }
+    return undefined;
+}
+
 export async function getDiffEntries(
     repoRoot: string,
     baseBranch: string,
     filterPrefix: string,
 ): Promise<DiffEntry[]> {
+    if (!isValidBranchName(baseBranch)) {
+        throw new Error(`Invalid branch name: ${baseBranch}`);
+    }
+
     let cmd = `git diff ${baseBranch} --name-status`;
     if (filterPrefix) {
         cmd += ` -- ${filterPrefix}`;
     }
 
-    let output: string;
-    try {
-        output = await execAsync(cmd, repoRoot);
-    } catch {
-        return [];
-    }
-
+    const output = await execAsync(cmd, repoRoot);
     if (!output) {
         return [];
     }
@@ -75,25 +87,15 @@ export async function getDiffEntries(
         const parts = line.split('\t');
         if (parts.length < 2) { continue; }
 
-        const statusCode = parts[0] as GitFileStatus;
-        // For renames: R100\told_path\tnew_path
-        if (statusCode.startsWith('R') && parts.length >= 3) {
-            entries.push({
-                status: 'R',
-                path: parts[2],
-                oldPath: parts[1],
-            });
-        } else if (statusCode.startsWith('C') && parts.length >= 3) {
-            entries.push({
-                status: 'C',
-                path: parts[2],
-                oldPath: parts[1],
-            });
+        const statusCode = parseGitStatus(parts[0]);
+        if (!statusCode) { continue; }
+
+        if (statusCode === 'R' && parts.length >= 3) {
+            entries.push({ status: 'R', path: parts[2], oldPath: parts[1] });
+        } else if (statusCode === 'C' && parts.length >= 3) {
+            entries.push({ status: 'C', path: parts[2], oldPath: parts[1] });
         } else {
-            entries.push({
-                status: statusCode.charAt(0) as GitFileStatus,
-                path: parts[1],
-            });
+            entries.push({ status: statusCode, path: parts[1] });
         }
     }
 

@@ -3,9 +3,12 @@
   "displayName": "XLens",
   "description": "Developer lens for monorepo workflows — changed files tree, diff explorer, and more",
   "version": "0.1.0",
+  "publisher": "l8ng",
+  "license": "MIT",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "git@github.com:StrayDragon/vscode-xlens.git"
+    "url": "https://github.com/straydragon/vscode-xlens"
   },
   "engines": {
     "vscode": "^1.105.1"
@@ -13,6 +16,17 @@
   "categories": [
     "Other"
   ],
+  "keywords": [
+    "git",
+    "diff",
+    "changed files",
+    "monorepo",
+    "tree view"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onView:gitDiffExplorerView"
   ],

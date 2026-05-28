@@ -2,31 +2,50 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { exec } from 'child_process';
 import { GitDiffTreeProvider } from './treeProvider';
-import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch } from './gitService';
-import { GitStatusDecorationProvider, StatusDisplayMode } from './decorationProvider';
-import { TreeNode } from './types';
-
-function execAsync(command: string, cwd: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-        exec(command, { cwd, maxBuffer: 10 * 1024 * 1024 }, (error: Error | null, stdout: string, stderr: string) => {
-            if (error) {
-                reject(new Error(stderr || error.message));
-                return;
-            }
-            resolve(stdout);
-        });
-    });
-}
+import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName } from './gitService';
+import { GitStatusDecorationProvider } from './decorationProvider';
+import { TreeNode, StatusDisplayMode } from './types';
 
 const TEMP_DIR = path.join(os.tmpdir(), 'xlens-diff');
 
 let provider: GitDiffTreeProvider | undefined;
 let decorationProvider: GitStatusDecorationProvider | undefined;
+let treeView: vscode.TreeView<TreeNode> | undefined;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let repoRoot: string | undefined;
 let detectedBaseBranch: string | undefined;
+let configCache: Config | undefined;
+
+interface Config {
+    autoReveal: boolean;
+    autoRefresh: boolean;
+    refreshDebounce: number;
+    baseBranch: string;
+    filterPrefix: string;
+    statusDisplay: StatusDisplayMode;
+}
+
+function readConfig(): Config {
+    const config = vscode.workspace.getConfiguration('gitDiffExplorer');
+    return {
+        autoReveal: config.get<boolean>('autoReveal', true),
+        autoRefresh: config.get<boolean>('autoRefresh', true),
+        refreshDebounce: config.get<number>('refreshDebounce', 2000),
+        baseBranch: config.get<string>('baseBranch', ''),
+        filterPrefix: config.get<string>('filterPrefix', ''),
+        statusDisplay: config.get<StatusDisplayMode>('statusDisplay', 'badge'),
+    };
+}
+
+function getConfig(): Config {
+    return configCache ?? readConfig();
+}
+
+function getResolvedBaseBranch(): string {
+    const cfg = getConfig();
+    return cfg.baseBranch || detectedBaseBranch || 'master';
+}
 
 export async function activate(context: vscode.ExtensionContext) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -44,26 +63,24 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    provider = new GitDiffTreeProvider(repoRoot);
+    configCache = readConfig();
 
+    provider = new GitDiffTreeProvider(repoRoot);
     decorationProvider = new GitStatusDecorationProvider(repoRoot);
+    context.subscriptions.push(provider, decorationProvider);
     context.subscriptions.push(
         vscode.window.registerFileDecorationProvider(decorationProvider),
     );
 
-    // Apply initial display mode
-    const displayMode = vscode.workspace.getConfiguration('gitDiffExplorer').get<StatusDisplayMode>('statusDisplay', 'badge');
-    provider.setDisplayMode(displayMode);
-    decorationProvider.setDisplayMode(displayMode);
+    provider.setDisplayMode(configCache.statusDisplay);
+    decorationProvider.setDisplayMode(configCache.statusDisplay);
 
-    // Auto-detect base branch (master → main → develop → trunk)
     detectedBaseBranch = await detectBaseBranch(repoRoot);
 
-    const treeView = vscode.window.createTreeView('gitDiffExplorerView', {
+    treeView = vscode.window.createTreeView('gitDiffExplorerView', {
         treeDataProvider: provider,
         showCollapseAll: true,
     });
-
     context.subscriptions.push(treeView);
 
     // Initial load
@@ -80,7 +97,6 @@ export async function activate(context: vscode.ExtensionContext) {
             const baseBranch = getResolvedBaseBranch();
             const currentPath = path.join(repoRoot, node.relativePath);
 
-            // Get base branch file content via git show
             let baseContent: string;
             try {
                 baseContent = await execAsync(
@@ -88,7 +104,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     repoRoot,
                 );
             } catch {
-                // File doesn't exist on base branch (newly added)
                 vscode.window.showInformationMessage(
                     `XLens: This file does not exist on ${baseBranch}. Opening current version instead.`,
                 );
@@ -96,7 +111,6 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Write base content to temp file for diff
             fs.mkdirSync(TEMP_DIR, { recursive: true });
             const safeName = node.relativePath.replace(/[\/\\]/g, '_');
             const tempPath = path.join(TEMP_DIR, `${baseBranch}...${safeName}`);
@@ -105,13 +119,13 @@ export async function activate(context: vscode.ExtensionContext) {
             const baseUri = vscode.Uri.file(tempPath);
             const currentUri = vscode.Uri.file(currentPath);
             const title = `${node.relativePath} (${baseBranch} ↔ Current)`;
-            vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title);
+            vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title).then(undefined, () => {});
         }),
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.openFile', (node: TreeNode) => {
-            if (!repoRoot || node.type !== 'file') { return; }
+        vscode.commands.registerCommand('gitDiffExplorer.openFile', (node?: TreeNode) => {
+            if (!repoRoot || !node || node.type !== 'file') { return; }
             const filePath = path.join(repoRoot, node.relativePath);
             vscode.window.showTextDocument(vscode.Uri.file(filePath));
         }),
@@ -126,7 +140,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('gitDiffExplorer.changeBaseBranch', async () => {
-            const config = vscode.workspace.getConfiguration('gitDiffExplorer');
             const current = getResolvedBaseBranch();
             const picks = ['master', 'main', 'develop', 'trunk'].map(b => ({
                 label: b,
@@ -137,6 +150,7 @@ export async function activate(context: vscode.ExtensionContext) {
             });
             if (input && input.label !== current) {
                 detectedBaseBranch = input.label;
+                const config = vscode.workspace.getConfiguration('gitDiffExplorer');
                 await config.update('baseBranch', input.label, vscode.ConfigurationTarget.Global);
                 doRefresh();
             }
@@ -151,7 +165,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 placeHolder: 'e.g. utils.ts, sub/dir/file.ts',
             });
             if (!fileName) { return; }
-            const filePath = path.join(repoRoot, node.relativePath, fileName);
+            const filePath = path.resolve(repoRoot, node.relativePath, fileName);
+            if (!filePath.startsWith(repoRoot + path.sep) && filePath !== repoRoot) {
+                vscode.window.showErrorMessage('XLens: Path is outside the repository.');
+                return;
+            }
             const dir = path.dirname(filePath);
             fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(filePath, '');
@@ -164,14 +182,13 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('gitDiffExplorer.revealInExplorer', (node: TreeNode) => {
             if (!repoRoot) { return; }
             const filePath = path.join(repoRoot, node.relativePath);
-            vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(filePath));
+            vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(filePath)).then(undefined, () => {});
         }),
     );
 
-    // Reveal the active editor file in XLens tree (works from editor tab context menu or command palette)
     context.subscriptions.push(
         vscode.commands.registerCommand('gitDiffExplorer.revealActiveFile', async () => {
-            if (!provider || !repoRoot) { return; }
+            if (!provider || !repoRoot || !treeView) { return; }
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
             const filePath = editor.document.uri.fsPath;
@@ -186,12 +203,11 @@ export async function activate(context: vscode.ExtensionContext) {
         }),
     );
 
-    // Reveal current file in tree when editor changes
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor((editor) => {
-            if (!editor || !provider || !repoRoot) { return; }
-            const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-            if (!config.get<boolean>('autoReveal', true)) { return; }
+            if (!editor || !provider || !repoRoot || !treeView) { return; }
+            const cfg = getConfig();
+            if (!cfg.autoReveal) { return; }
             const filePath = editor.document.uri.fsPath;
             const rel = path.relative(repoRoot, filePath);
             provider.setActivePath(rel || undefined);
@@ -202,17 +218,15 @@ export async function activate(context: vscode.ExtensionContext) {
         }),
     );
 
-    // Watch for file saves
     context.subscriptions.push(
         vscode.workspace.onDidSaveTextDocument(() => scheduleRefresh()),
     );
 
-    // Watch for config changes
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration('gitDiffExplorer')) {
-                const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-                const mode = config.get<StatusDisplayMode>('statusDisplay', 'badge');
+                configCache = readConfig();
+                const mode = configCache.statusDisplay;
                 provider?.setDisplayMode(mode);
                 decorationProvider?.setDisplayMode(mode);
                 scheduleRefresh();
@@ -244,35 +258,30 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 }
 
-function getResolvedBaseBranch(): string {
-    const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-    const configBranch = config.get<string>('baseBranch', '');
-    return configBranch || detectedBaseBranch || 'master';
-}
-
 function scheduleRefresh() {
-    const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-    if (!config.get<boolean>('autoRefresh', true)) { return; }
+    const cfg = getConfig();
+    if (!cfg.autoRefresh) { return; }
 
-    const debounce = config.get<number>('refreshDebounce', 2000);
     if (refreshTimer) { clearTimeout(refreshTimer); }
-    refreshTimer = setTimeout(() => doRefresh(), debounce);
+    refreshTimer = setTimeout(() => doRefresh(), cfg.refreshDebounce);
 }
+
+let refreshInFlight = false;
 
 async function doRefresh() {
     if (!provider || !repoRoot) { return; }
-
-    const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-    const baseBranch = getResolvedBaseBranch();
-    const manualPrefix = config.get<string>('filterPrefix', '');
-
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) { return; }
-
-    const workspacePath = workspaceFolders[0].uri.fsPath;
-    const filterPrefix = getFilterPrefix(workspacePath, repoRoot, manualPrefix);
+    if (refreshInFlight) { return; }
+    refreshInFlight = true;
 
     try {
+        const cfg = getConfig();
+        const baseBranch = getResolvedBaseBranch();
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) { return; }
+
+        const workspacePath = workspaceFolders[0].uri.fsPath;
+        const filterPrefix = getFilterPrefix(workspacePath, repoRoot, cfg.filterPrefix);
+
         const entries = await getDiffEntries(repoRoot, baseBranch, filterPrefix);
         provider.refresh(entries);
         decorationProvider?.updateStatuses(provider.getStatusMap());
@@ -281,12 +290,19 @@ async function doRefresh() {
         vscode.window.showErrorMessage(`XLens: ${message}`);
         provider.clear();
         decorationProvider?.updateStatuses(new Map());
+    } finally {
+        refreshInFlight = false;
     }
 }
 
 export function deactivate() {
     if (refreshTimer) { clearTimeout(refreshTimer); }
-    // Clean up temp files
+    provider = undefined;
+    decorationProvider = undefined;
+    treeView = undefined;
+    configCache = undefined;
+    repoRoot = undefined;
+    detectedBaseBranch = undefined;
     try {
         fs.rmSync(TEMP_DIR, { recursive: true, force: true });
     } catch {

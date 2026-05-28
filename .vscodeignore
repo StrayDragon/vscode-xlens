@@ -1,18 +1,66 @@
+# Development and build files
 .vscode/**
 .vscode-test/**
 out/**
 node_modules/**
 src/**
+.git/**
 .gitignore
+.gitattributes
+.github/**
 .yarnrc
 .npmrc
-esbuild.js
-eslint.config.mjs
-vsc-extension-quickstart.md
 pnpm-lock.yaml
 pnpm-workspace.yaml
-**/tsconfig.json
-**/eslint.config.mjs
-**/*.map
+
+# Build tools and configuration
+esbuild.js
+tsconfig.json
+eslint.config.mjs
+vsc-extension-quickstart.md
+.vscode-test.mjs
+justfile
+
+# Source files (compiled to dist/)
 **/*.ts
-**/.vscode-test.*
+**/*.map
+dist/**/*.js.map
+
+# Documentation and examples
+docs/**
+examples/**
+*.md
+!README.md
+
+# Images (except marketplace icon)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+!icon.png
+
+# Development directories
+.claude/**
+*.log
+*.tmp
+*.temp
+
+# IDE and editor files
+.idea/**
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Previous builds
+*.vsix
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+**/test/**
+**/tests/**

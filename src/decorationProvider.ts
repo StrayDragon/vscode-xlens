@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitFileStatus } from './types';
+import { GitFileStatus, StatusDisplayMode } from './types';
 
 const STATUS_DECORATIONS: Record<GitFileStatus, { badge: string; color: string; tooltip: string }> = {
     A: { badge: 'A', color: 'charts.green',    tooltip: 'Added' },
@@ -13,9 +13,7 @@ const STATUS_DECORATIONS: Record<GitFileStatus, { badge: string; color: string; 
     '?': { badge: '?', color: 'charts.foreground', tooltip: 'Untracked' },
 };
 
-export type StatusDisplayMode = 'badge' | 'description' | 'hidden';
-
-export class GitStatusDecorationProvider implements vscode.FileDecorationProvider {
+export class GitStatusDecorationProvider implements vscode.FileDecorationProvider, vscode.Disposable {
     private _onDidChangeFileDecorations = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
     readonly onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
 
@@ -25,6 +23,10 @@ export class GitStatusDecorationProvider implements vscode.FileDecorationProvide
 
     constructor(repoRoot: string) {
         this.repoRoot = repoRoot;
+    }
+
+    dispose(): void {
+        this._onDidChangeFileDecorations.dispose();
     }
 
     setDisplayMode(mode: StatusDisplayMode): void {
@@ -45,6 +47,10 @@ export class GitStatusDecorationProvider implements vscode.FileDecorationProvide
         }
 
         const relPath = path.relative(this.repoRoot, uri.fsPath);
+        if (relPath.startsWith('..')) {
+            return undefined;
+        }
+
         const status = this.statusMap.get(relPath);
         if (!status) {
             return undefined;
