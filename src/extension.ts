@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import { exec } from 'child_process';
 import { GitDiffTreeProvider } from './treeProvider';
 import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch } from './gitService';
+import { GitStatusDecorationProvider, StatusDisplayMode } from './decorationProvider';
 import { TreeNode } from './types';
 
 function execAsync(command: string, cwd: string): Promise<string> {
@@ -22,6 +23,7 @@ function execAsync(command: string, cwd: string): Promise<string> {
 const TEMP_DIR = path.join(os.tmpdir(), 'xlens-diff');
 
 let provider: GitDiffTreeProvider | undefined;
+let decorationProvider: GitStatusDecorationProvider | undefined;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let repoRoot: string | undefined;
 let detectedBaseBranch: string | undefined;
@@ -43,6 +45,16 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     provider = new GitDiffTreeProvider(repoRoot);
+
+    decorationProvider = new GitStatusDecorationProvider(repoRoot);
+    context.subscriptions.push(
+        vscode.window.registerFileDecorationProvider(decorationProvider),
+    );
+
+    // Apply initial display mode
+    const displayMode = vscode.workspace.getConfiguration('gitDiffExplorer').get<StatusDisplayMode>('statusDisplay', 'badge');
+    provider.setDisplayMode(displayMode);
+    decorationProvider.setDisplayMode(displayMode);
 
     // Auto-detect base branch (master → main → develop → trunk)
     detectedBaseBranch = await detectBaseBranch(repoRoot);
@@ -199,6 +211,10 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration('gitDiffExplorer')) {
+                const config = vscode.workspace.getConfiguration('gitDiffExplorer');
+                const mode = config.get<StatusDisplayMode>('statusDisplay', 'badge');
+                provider?.setDisplayMode(mode);
+                decorationProvider?.setDisplayMode(mode);
                 scheduleRefresh();
             }
         }),
@@ -259,10 +275,12 @@ async function doRefresh() {
     try {
         const entries = await getDiffEntries(repoRoot, baseBranch, filterPrefix);
         provider.refresh(entries);
+        decorationProvider?.updateStatuses(provider.getStatusMap());
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`XLens: ${message}`);
         provider.clear();
+        decorationProvider?.updateStatuses(new Map());
     }
 }
 

@@ -146,6 +146,17 @@
           "type": "boolean",
           "default": true,
           "description": "Auto-reveal and expand the current editor file in the tree"
+        },
+        "gitDiffExplorer.statusDisplay": {
+          "type": "string",
+          "default": "badge",
+          "enum": ["badge", "description", "hidden"],
+          "enumDescriptions": [
+            "Show git status as a colored badge decoration after the file name",
+            "Show git status as description text next to the file name",
+            "Hide git status indicators entirely"
+          ],
+          "description": "How to display git status for changed files"
         }
       }
     }

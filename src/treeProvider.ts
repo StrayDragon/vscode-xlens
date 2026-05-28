@@ -1,17 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { DiffEntry, GitFileStatus, TreeNode } from './types';
-
-const STATUS_ICONS: Record<GitFileStatus, { id: string; color: vscode.ThemeColor }> = {
-    A: { id: 'diff-added', color: new vscode.ThemeColor('charts.green') },
-    M: { id: 'diff-modified', color: new vscode.ThemeColor('charts.yellow') },
-    D: { id: 'diff-removed', color: new vscode.ThemeColor('charts.red') },
-    R: { id: 'diff-renamed', color: new vscode.ThemeColor('charts.blue') },
-    C: { id: 'diff-added', color: new vscode.ThemeColor('charts.green') },
-    T: { id: 'diff-modified', color: new vscode.ThemeColor('charts.yellow') },
-    U: { id: 'diff-modified', color: new vscode.ThemeColor('charts.yellow') },
-    '?': { id: 'question', color: new vscode.ThemeColor('charts.foreground') },
-};
+import { StatusDisplayMode } from './decorationProvider';
 
 const STATUS_LABELS: Record<GitFileStatus, string> = {
     A: 'Added',
@@ -30,9 +20,20 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     private rootNode: TreeNode | null = null;
     private parentMap = new Map<TreeNode, TreeNode>();
+    private statusMap = new Map<string, GitFileStatus>();
     private activePath: string | undefined;
+    private displayMode: StatusDisplayMode = 'badge';
 
     constructor(private repoRoot: string) {}
+
+    setDisplayMode(mode: StatusDisplayMode): void {
+        this.displayMode = mode;
+        this._onDidChangeTreeData.fire();
+    }
+
+    getStatusMap(): Map<string, GitFileStatus> {
+        return this.statusMap;
+    }
 
     refresh(entries: DiffEntry[]): void {
         this.rootNode = this.buildTree(entries);
@@ -87,9 +88,10 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.resourceUri = vscode.Uri.file(filePath);
 
         const status = element.status!;
-        const iconDef = STATUS_ICONS[status];
-        item.iconPath = new vscode.ThemeIcon(iconDef.id, iconDef.color);
-        item.description = STATUS_LABELS[status];
+        // iconPath intentionally not set — VS Code resolves file-type icon from resourceUri + user's icon theme
+        if (this.displayMode === 'description') {
+            item.description = STATUS_LABELS[status];
+        }
         item.contextValue = `file_${status.toLowerCase()}`;
 
         item.command = {
@@ -121,6 +123,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     private buildTree(entries: DiffEntry[]): TreeNode {
         this.parentMap.clear();
+        this.statusMap.clear();
         const root: TreeNode = {
             type: 'folder',
             name: '',
@@ -146,6 +149,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                     };
                     current.children.set(part, node);
                     this.parentMap.set(node, current);
+                    this.statusMap.set(entry.path, entry.status);
                 } else {
                     if (!current.children.has(part)) {
                         const folder: TreeNode = {
