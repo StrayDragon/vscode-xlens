@@ -12,7 +12,7 @@ let detectedBaseBranch: string | undefined;
 export async function activate(context: vscode.ExtensionContext) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-        vscode.window.showWarningMessage('Git Diff Explorer: No workspace folder open.');
+        vscode.window.showWarningMessage('XLens: No workspace folder open.');
         return;
     }
 
@@ -21,7 +21,7 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
         repoRoot = await getGitRepoRoot(workspacePath);
     } catch {
-        vscode.window.showWarningMessage('Git Diff Explorer: Not a git repository.');
+        vscode.window.showWarningMessage('XLens: Not a git repository.');
         return;
     }
 
@@ -162,7 +162,7 @@ async function doRefresh() {
         provider.refresh(entries);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`Git Diff Explorer: ${message}`);
+        vscode.window.showErrorMessage(`XLens: ${message}`);
         provider.clear();
     }
 }

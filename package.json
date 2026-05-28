@@ -1,7 +1,7 @@
 {
   "name": "vscode-xlens",
-  "displayName": "Git Diff Explorer",
-  "description": "Tree view of changed files filtered to current workspace path in monorepos",
+  "displayName": "XLens",
+  "description": "Developer lens for monorepo workflows — changed files tree, diff explorer, and more",
   "version": "0.1.0",
   "engines": {
     "vscode": "^1.105.1"
@@ -18,7 +18,7 @@
       "activitybar": [
         {
           "id": "gitDiffExplorer",
-          "title": "Git Diff Explorer",
+          "title": "XLens",
           "icon": "resources/diff-icon.svg"
         }
       ]
@@ -88,7 +88,7 @@
       ]
     },
     "configuration": {
-      "title": "Git Diff Explorer",
+      "title": "XLens",
       "properties": {
         "gitDiffExplorer.baseBranch": {
           "type": "string",
