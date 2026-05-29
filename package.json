@@ -158,7 +158,7 @@
         },
         "gitDiffExplorer.autoReveal": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Auto-reveal and expand the current editor file in the tree"
         },
         "gitDiffExplorer.statusDisplay": {

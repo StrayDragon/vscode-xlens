@@ -29,7 +29,7 @@ interface Config {
 function readConfig(): Config {
     const config = vscode.workspace.getConfiguration('gitDiffExplorer');
     return {
-        autoReveal: config.get<boolean>('autoReveal', true),
+        autoReveal: config.get<boolean>('autoReveal', false),
         autoRefresh: config.get<boolean>('autoRefresh', true),
         refreshDebounce: config.get<number>('refreshDebounce', 2000),
         baseBranch: config.get<string>('baseBranch', ''),
