@@ -69,7 +69,7 @@ export async function getDiffEntries(
         throw new Error(`Invalid branch name: ${baseBranch}`);
     }
 
-    let cmd = `git diff ${baseBranch} --name-status`;
+    let cmd = `git -c core.quotePath=false diff ${baseBranch} --name-status`;
     if (filterPrefix) {
         cmd += ` -- ${filterPrefix}`;
     }
