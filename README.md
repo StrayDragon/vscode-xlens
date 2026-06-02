@@ -1,13 +1,35 @@
-# XLens
+<div align="center">
+  <img src="icon.png" alt="XLens" width="160" height="160"/>
 
-[![](https://img.shields.io/visual-studio-marketplace/v/l8ng.vscode-xlens?style=flat-square&logo=visualstudiocode&label=marketplace)](https://marketplace.visualstudio.com/items?l8ng.vscode-xlens)
-[![](https://img.shields.io/github/license/straydragon/vscode-xlens?style=flat-square&color=blue)](https://github.com/straydragon/vscode-xlens/blob/main/LICENSE)
+  # XLens
 
-在 monorepo 子项目中只看当前目录下有变化的文件。
+  [![](https://img.shields.io/visual-studio-marketplace/v/l8ng.vscode-xlens?style=flat-square&logo=visualstudiocode&label=marketplace)](https://marketplace.visualstudio.com/items?itemName=l8ng.vscode-xlens)
+  [![](https://img.shields.io/open-vsx/v/l8ng/vscode-xlens?style=flat-square&logo=open-vsx&label=open-vsx)](https://open-vsx.org/extension/l8ng/vscode-xlens)
+  [![](https://img.shields.io/github/license/straydragon/vscode-xlens?style=flat-square&color=blue)](https://github.com/straydragon/vscode-xlens/blob/main/LICENSE)
+  [![](https://img.shields.io/badge/VS_Code-%5E1.105.1-blue?style=flat-square&logo=visualstudiocode)](https://code.visualstudio.com)
+
+  monorepo 子项目里只看自己目录的变更文件
+
+  [配置](#配置) · [命令](#命令) · [状态标记](#文件状态标记) · [CHANGELOG](CHANGELOG.md)
+</div>
 
 ---
 
-打开 `services/user-service/` 这类子文件夹时，VS Code 的源代码管理视图会显示整个仓库的变更。XLens 在 Explorer 边栏加一个树视图，只显示当前工作区下的变更文件，按目录结构组织。点击打开文件，右键和基线分支做 diff。
+打开 `services/user-service/` 这类子文件夹时，VS Code 的源代码管理视图显示整个仓库的变更。XLens 在 Explorer 边栏加一个树视图，只显示当前工作区下的变更文件，按目录结构组织。点击打开文件，右键和基线分支做 diff。
+
+```
+ Explorer
+ ▸ OPEN EDITORS
+ ▾ XLENS: CHANGED FILES
+   📁 src
+   ├── 📁 services
+   │   ├── 📄 auth.ts         M
+   │   └── 📄 user.ts         A
+   ├── 📄 index.ts            M
+   └── 📄 old-util.ts         D
+   📄 config → config-v2.ts   R
+   📄 notes.md                ?
+```
 
 ## 工作方式
 
