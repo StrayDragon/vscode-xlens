@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { DiffEntry, GitFileStatus, TreeNode, FolderNode, FileNode, StatusDisplayMode } from './types';
+import * as fs from 'fs';
+import { DiffEntry, GitFileStatus, TreeNode, FolderNode, FileNode, StatusDisplayMode, ViewMode } from './types';
+import { loadPreset } from './presetService';
 
 const STATUS_LABELS: Record<GitFileStatus, string> = {
     A: 'Added',
@@ -28,6 +30,12 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
     private activePath: string | undefined;
     private displayMode: StatusDisplayMode = 'badge';
 
+    // Preset state
+    private viewMode: ViewMode = 'live';
+    private activePresetName: string | undefined;
+    private presetFiles: string[] = [];
+    private currentEntries: DiffEntry[] = [];
+
     constructor(private repoRoot: string) {}
 
     dispose(): void {
@@ -43,9 +51,41 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         return this.statusMap;
     }
 
+    // ── Preset mode ──────────────────────────────────────────
+
+    getViewMode(): ViewMode {
+        return this.viewMode;
+    }
+
+    getActivePresetName(): string | undefined {
+        return this.activePresetName;
+    }
+
+    getPresetFiles(): string[] {
+        return this.presetFiles;
+    }
+
+    getCurrentEntries(): DiffEntry[] {
+        return this.currentEntries;
+    }
+
+    setViewMode(mode: ViewMode, presetName?: string): void {
+        this.viewMode = mode;
+        if (mode === 'live') {
+            this.activePresetName = undefined;
+            this.presetFiles = [];
+        } else {
+            this.activePresetName = presetName;
+        }
+        // Rebuild with cached entries
+        this.rebuildTree();
+    }
+
+    // ── Refresh ──────────────────────────────────────────────
+
     refresh(entries: DiffEntry[]): void {
-        this.rootNode = this.buildTree(entries);
-        this._onDidChangeTreeData.fire();
+        this.currentEntries = entries;
+        this.rebuildTree();
     }
 
     clear(): void {
@@ -53,6 +93,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         this.nodeByPath.clear();
         this.statusMap.clear();
         this.activePath = undefined;
+        this.currentEntries = [];
+        this.presetFiles = [];
         this._onDidChangeTreeData.fire();
     }
 
@@ -68,6 +110,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         if (!rel || rel.startsWith('..')) { return undefined; }
         return this.nodeByPath.get(rel);
     }
+
+    // ── TreeDataProvider ─────────────────────────────────────
 
     getTreeItem(element: TreeNode): vscode.TreeItem {
         if (element.type === 'folder') {
@@ -90,47 +134,123 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         return parent?.type === 'folder' ? parent : undefined;
     }
 
-    private getFolderTreeItem(element: FolderNode): vscode.TreeItem {
-        const isOnActivePath = this.activePath !== undefined &&
-            (this.activePath.startsWith(element.relativePath + '/') ||
-             this.activePath === element.relativePath);
-        const item = new vscode.TreeItem(
-            element.name,
-            isOnActivePath
-                ? vscode.TreeItemCollapsibleState.Expanded
-                : vscode.TreeItemCollapsibleState.Collapsed,
-        );
-        item.iconPath = vscode.ThemeIcon.Folder;
-        item.resourceUri = vscode.Uri.file(path.join(this.repoRoot, element.relativePath));
-        item.contextValue = 'folder';
-        const count = element.fileCount;
-        item.description = `${count} file${count !== 1 ? 's' : ''}`;
-        return item;
-    }
+    // ── Tree building (core) ─────────────────────────────────
 
-    private getFileTreeItem(element: FileNode): vscode.TreeItem {
-        const item = new vscode.TreeItem(
-            element.name,
-            vscode.TreeItemCollapsibleState.None,
-        );
-        const filePath = path.join(this.repoRoot, element.relativePath);
-        item.resourceUri = vscode.Uri.file(filePath);
-        // iconPath intentionally not set — VS Code resolves file-type icon from resourceUri + user's icon theme
-        if (this.displayMode === 'description') {
-            item.description = STATUS_LABELS[element.status];
+    private rebuildTree(): void {
+        if (this.viewMode === 'preset' && this.activePresetName) {
+            this.buildPresetTree();
+        } else {
+            this.buildLiveTree();
         }
-        item.contextValue = `file_${element.status.toLowerCase()}`;
-        item.command = {
-            command: 'gitDiffExplorer.openFile',
-            title: 'Open File',
-            arguments: [element],
-        };
-        return item;
+        this._onDidChangeTreeData.fire();
     }
 
-    private buildTree(entries: DiffEntry[]): FolderNode {
+    private buildLiveTree(): void {
+        this.statusMap.clear();
+        this.rootNode = this.buildTreeFromEntries(this.currentEntries);
+    }
+
+    private buildPresetTree(): void {
         this.nodeByPath.clear();
         this.statusMap.clear();
+
+        if (!this.activePresetName) {
+            this.rootNode = null;
+            return;
+        }
+
+        // Load preset
+        let presetFiles: string[];
+        try {
+            const preset = loadPreset(this.repoRoot, this.activePresetName);
+            presetFiles = preset.files;
+            this.presetFiles = presetFiles;
+        } catch {
+            this.presetFiles = [];
+            this.rootNode = null;
+            return;
+        }
+
+        if (presetFiles.length === 0) {
+            this.rootNode = this.makeEmptyPresetRoot();
+            return;
+        }
+
+        // Build a live-indexed map: path → DiffEntry
+        const liveByPath = new Map<string, DiffEntry>();
+        for (const entry of this.currentEntries) {
+            liveByPath.set(entry.path, entry);
+        }
+
+        // Prepare entries for tree building
+        const merged: DiffEntry[] = [];
+
+        for (const filePath of presetFiles) {
+            const liveEntry = liveByPath.get(filePath);
+
+            if (liveEntry) {
+                // File is in git diff — show with live status
+                this.statusMap.set(filePath, liveEntry.status);
+                merged.push(liveEntry);
+            } else {
+                // File is in preset but not in git diff
+                const existsOnDisk = fs.existsSync(path.join(this.repoRoot, filePath));
+                if (!existsOnDisk) {
+                    // File deleted from disk → show as missing
+                    const entry: DiffEntry = { status: 'D' as GitFileStatus, path: filePath };
+                    this.statusMap.set(filePath, 'D');
+                    // We'll flag it in the tree item
+                    merged.push(entry);
+                } else {
+                    // File exists but is clean → show as clean
+                    const entry: DiffEntry = { status: 'M' as GitFileStatus, path: filePath };
+                    // Don't put in statusMap so decoration doesn't apply; use isClean flag
+                    merged.push(entry);
+                }
+            }
+        }
+
+        // Also mark which files are in the preset (for isClean flagging)
+        this.rootNode = this.buildTreeFromEntries(merged);
+
+        // Post-process: mark clean files
+        this.markCleanNodes(liveByPath);
+    }
+
+    private markCleanNodes(liveByPath: Map<string, DiffEntry>): void {
+        for (const [, node] of this.nodeByPath) {
+            if (node.type !== 'file') { continue; }
+            const fileNode = node as FileNode;
+            const liveEntry = liveByPath.get(fileNode.relativePath);
+
+            if (!liveEntry) {
+                // Not in git diff
+                const existsOnDisk = fs.existsSync(path.join(this.repoRoot, fileNode.relativePath));
+                fileNode.isClean = existsOnDisk;
+                fileNode.isMissing = !existsOnDisk;
+            } else {
+                fileNode.isClean = false;
+                fileNode.isMissing = false;
+            }
+        }
+    }
+
+    private makeEmptyPresetRoot(): FolderNode {
+        this.nodeByPath.clear();
+        this.statusMap.clear();
+        const root: FolderNode = {
+            type: 'folder',
+            name: '',
+            relativePath: '',
+            children: new Map(),
+            fileCount: 0,
+        };
+        this.nodeByPath.set('', root);
+        return root;
+    }
+
+    private buildTreeFromEntries(entries: DiffEntry[]): FolderNode {
+        this.nodeByPath.clear();
 
         const root: FolderNode = {
             type: 'folder',
@@ -193,5 +313,75 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         }
         node.fileCount = count;
         return count;
+    }
+
+    // ── Tree items ───────────────────────────────────────────
+
+    private getFolderTreeItem(element: FolderNode): vscode.TreeItem {
+        const isOnActivePath = this.activePath !== undefined &&
+            (this.activePath.startsWith(element.relativePath + '/') ||
+             this.activePath === element.relativePath);
+        const item = new vscode.TreeItem(
+            element.name,
+            isOnActivePath
+                ? vscode.TreeItemCollapsibleState.Expanded
+                : vscode.TreeItemCollapsibleState.Collapsed,
+        );
+        item.iconPath = vscode.ThemeIcon.Folder;
+        item.resourceUri = vscode.Uri.file(path.join(this.repoRoot, element.relativePath));
+        // contextValue: folders get _inPreset suffix in preset mode
+        item.contextValue = this.viewMode === 'preset' ? 'folder_inPreset' : 'folder';
+        const count = element.fileCount;
+        item.description = `${count} file${count !== 1 ? 's' : ''}`;
+        return item;
+    }
+
+    private getFileTreeItem(element: FileNode): vscode.TreeItem {
+        const item = new vscode.TreeItem(
+            element.name,
+            vscode.TreeItemCollapsibleState.None,
+        );
+        const filePath = path.join(this.repoRoot, element.relativePath);
+        item.resourceUri = vscode.Uri.file(filePath);
+
+        const inPresetMode = this.viewMode === 'preset';
+
+        if (inPresetMode && element.isMissing) {
+            // File deleted from disk
+            item.description = '$(warning) missing';
+            item.tooltip = 'File is in preset but no longer exists on disk';
+            item.iconPath = new vscode.ThemeIcon('warning');
+        } else if (inPresetMode && element.isClean) {
+            // Clean/unchanged
+            item.description = '$(circle-outline) clean';
+            item.tooltip = 'Not changed from base branch (tracked by preset)';
+            item.iconPath = new vscode.ThemeIcon('circle-outline');
+        } else if (this.displayMode === 'description') {
+            item.description = STATUS_LABELS[element.status];
+        }
+
+        // iconPath intentionally not set for normal files — VS Code resolves file-type icon from resourceUri
+        // Only set for special states above
+
+        // contextValue
+        const statusSuffix = element.status.toLowerCase();
+        if (inPresetMode) {
+            if (element.isMissing) {
+                item.contextValue = `file_missing_inPreset`;
+            } else if (element.isClean) {
+                item.contextValue = `file_clean_inPreset`;
+            } else {
+                item.contextValue = `file_${statusSuffix}_inPreset`;
+            }
+        } else {
+            item.contextValue = `file_${statusSuffix}`;
+        }
+
+        item.command = {
+            command: 'gitDiffExplorer.openFile',
+            title: 'Open File',
+            arguments: [element],
+        };
+        return item;
     }
 }
