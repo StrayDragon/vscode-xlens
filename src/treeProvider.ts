@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import { DiffEntry, GitFileStatus, TreeNode, FolderNode, FileNode, StatusDisplayMode, ViewMode } from './types';
 import { loadPreset } from './presetService';
 
@@ -183,6 +182,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         }
 
         // Prepare entries for tree building
+        // Clean files: assume they exist (no per-file fs.existsSync).
+        // VS Code handles "file not found" when user opens it.
         const merged: DiffEntry[] = [];
 
         for (const filePath of presetFiles) {
@@ -193,27 +194,15 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
                 this.statusMap.set(filePath, liveEntry.status);
                 merged.push(liveEntry);
             } else {
-                // File is in preset but not in git diff
-                const existsOnDisk = fs.existsSync(path.join(this.repoRoot, filePath));
-                if (!existsOnDisk) {
-                    // File deleted from disk → show as missing
-                    const entry: DiffEntry = { status: 'D' as GitFileStatus, path: filePath };
-                    this.statusMap.set(filePath, 'D');
-                    // We'll flag it in the tree item
-                    merged.push(entry);
-                } else {
-                    // File exists but is clean → show as clean
-                    const entry: DiffEntry = { status: 'M' as GitFileStatus, path: filePath };
-                    // Don't put in statusMap so decoration doesn't apply; use isClean flag
-                    merged.push(entry);
-                }
+                // File is in preset but not in git diff → clean
+                const entry: DiffEntry = { status: 'M' as GitFileStatus, path: filePath };
+                // Don't add to statusMap — no decoration for clean files
+                merged.push(entry);
             }
         }
 
-        // Also mark which files are in the preset (for isClean flagging)
+        // Build tree and mark clean files
         this.rootNode = this.buildTreeFromEntries(merged);
-
-        // Post-process: mark clean files
         this.markCleanNodes(liveByPath);
     }
 
@@ -221,17 +210,9 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         for (const [, node] of this.nodeByPath) {
             if (node.type !== 'file') { continue; }
             const fileNode = node as FileNode;
-            const liveEntry = liveByPath.get(fileNode.relativePath);
-
-            if (!liveEntry) {
-                // Not in git diff
-                const existsOnDisk = fs.existsSync(path.join(this.repoRoot, fileNode.relativePath));
-                fileNode.isClean = existsOnDisk;
-                fileNode.isMissing = !existsOnDisk;
-            } else {
-                fileNode.isClean = false;
-                fileNode.isMissing = false;
-            }
+            const hasLiveStatus = liveByPath.has(fileNode.relativePath);
+            fileNode.isClean = !hasLiveStatus;
+            fileNode.isMissing = false;
         }
     }
 
@@ -346,12 +327,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
 
         const inPresetMode = this.viewMode === 'preset';
 
-        if (inPresetMode && element.isMissing) {
-            // File deleted from disk
-            item.description = '$(warning) missing';
-            item.tooltip = 'File is in preset but no longer exists on disk';
-            item.iconPath = new vscode.ThemeIcon('warning');
-        } else if (inPresetMode && element.isClean) {
+        if (inPresetMode && element.isClean) {
             // Clean/unchanged
             item.description = '$(circle-outline) clean';
             item.tooltip = 'Not changed from base branch (tracked by preset)';
@@ -366,9 +342,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         // contextValue
         const statusSuffix = element.status.toLowerCase();
         if (inPresetMode) {
-            if (element.isMissing) {
-                item.contextValue = `file_missing_inPreset`;
-            } else if (element.isClean) {
+            if (element.isClean) {
                 item.contextValue = `file_clean_inPreset`;
             } else {
                 item.contextValue = `file_${statusSuffix}_inPreset`;

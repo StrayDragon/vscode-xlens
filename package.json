@@ -2,7 +2,7 @@
   "name": "vscode-xlens",
   "displayName": "XLens",
   "description": "Developer lens for monorepo workflows — changed files tree, diff explorer, presets, and more",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "l8ng",
   "license": "MIT",
   "icon": "icon.png",

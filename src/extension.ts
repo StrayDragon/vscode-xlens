@@ -54,17 +54,12 @@ function getConfig(): Config {
     return configCache ?? readConfig();
 }
 
-function getResolvedBaseBranch(): string {
-    const cfg = getConfig();
+function getResolvedBaseBranch(preset?: { baseBranch?: string }): string {
     // Preset base branch override
-    if (provider?.getViewMode() === 'preset' && provider.getActivePresetName()) {
-        try {
-            const preset = loadPreset(repoRoot!, provider.getActivePresetName()!);
-            if (preset.baseBranch) {
-                return preset.baseBranch;
-            }
-        } catch { /* ignore */ }
+    if (preset?.baseBranch) {
+        return preset.baseBranch;
     }
+    const cfg = getConfig();
     return cfg.baseBranch || detectedBaseBranch || 'master';
 }
 
@@ -74,81 +69,69 @@ async function setContextKey(key: string, value: boolean): Promise<void> {
 
 // ── Helper: collect relative paths from tree nodes ──────────
 
-function collectFilePathsFromNodes(nodes: TreeNode[], provider: GitDiffTreeProvider): string[] {
+function collectFilePathsFromNodes(nodes: TreeNode[]): string[] {
     const files = new Set<string>();
-    const entries = provider.getCurrentEntries();
-    const livePaths = new Set(entries.map(e => e.path));
 
     for (const node of nodes) {
         if (node.type === 'file') {
             files.add(node.relativePath);
         } else if (node.type === 'folder') {
-            // Collect all files under this folder that appear in the current entries
-            const prefix = node.relativePath ? node.relativePath + '/' : '';
-            for (const p of livePaths) {
-                if (p.startsWith(prefix)) {
-                    files.add(p);
-                }
-            }
+            // Walk the tree under this folder to collect all descendant files
+            collectDescendantFiles(node, files);
         }
     }
 
     return [...files];
+}
+
+function collectDescendantFiles(folder: TreeNode, out: Set<string>): void {
+    if (!provider || folder.type !== 'folder') { return; }
+    for (const child of folder.children.values()) {
+        if (child.type === 'file') {
+            out.add(child.relativePath);
+        } else {
+            collectDescendantFiles(child, out);
+        }
+    }
 }
 
 // ── Helper: collect relative paths from URIs (File Explorer context menu) ──
 
-function collectFilePathsFromUris(uris: vscode.Uri[], repoRoot: string): string[] {
+async function collectFilePathsFromUris(uris: vscode.Uri[], repoRoot: string): Promise<string[]> {
     const files = new Set<string>();
+    const dirs: string[] = [];
 
     for (const uri of uris) {
         const absPath = uri.fsPath;
-        if (absPath.startsWith(repoRoot)) {
-            const rel = path.relative(repoRoot, absPath);
-            if (!rel.startsWith('..')) {
-                // Check if it's a directory
-                let stat: fs.Stats;
-                try {
-                    stat = fs.statSync(absPath);
-                } catch { continue; }
+        if (!absPath.startsWith(repoRoot)) { continue; }
+        const rel = path.relative(repoRoot, absPath);
+        if (rel.startsWith('..')) { continue; }
 
-                if (stat.isDirectory()) {
-                    // Recursively collect all git-tracked files
-                    collectGitTrackedFiles(absPath, repoRoot, new Set(), files);
-                } else if (rel) {
-                    files.add(rel);
-                }
-            }
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(absPath);
+        } catch { continue; }
+
+        if (stat.isDirectory()) {
+            dirs.push(rel);
+        } else if (rel) {
+            files.add(rel);
         }
+    }
+
+    // Use git ls-files for directories to avoid recursive FS walk
+    for (const dirRel of dirs) {
+        try {
+            const prefix = dirRel ? dirRel + '/' : '';
+            const output = await execAsync(`git ls-files -- ${prefix}`, repoRoot);
+            for (const line of output.split('\n')) {
+                const trimmed = line.trim();
+                if (trimmed) { files.add(trimmed); }
+            }
+        } catch { /* skip on git error */ }
     }
 
     return [...files];
-}
-
-function collectGitTrackedFiles(dir: string, repoRoot: string, seen: Set<string>, out: Set<string>): void {
-    let entries: fs.Dirent[];
-    try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch { return; }
-
-    for (const entry of entries) {
-        if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.xlens') {
-            continue;
-        }
-
-        const absPath = path.join(dir, entry.name);
-        const rel = path.relative(repoRoot, absPath);
-
-        if (rel.startsWith('..')) { continue; }
-        if (seen.has(rel)) { continue; }
-        seen.add(rel);
-
-        if (entry.isDirectory()) {
-            collectGitTrackedFiles(absPath, repoRoot, seen, out);
-        } else if (entry.isFile()) {
-            out.add(rel);
-        }
-    }
 }
 
 // ── Presets Quick Pick ──────────────────────────────────────
@@ -490,7 +473,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Collect nodes: if multi-selected, use selected array; otherwise use the single clicked node
             const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = collectFilePathsFromNodes(nodes, provider);
+            const filePaths = collectFilePathsFromNodes(nodes);
             if (filePaths.length === 0) {
                 vscode.window.showInformationMessage('XLens: No files to add.');
                 return;
@@ -551,7 +534,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (!repoRoot || !provider) { return; }
 
             const uris: vscode.Uri[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = collectFilePathsFromUris(uris, repoRoot);
+            const filePaths = await collectFilePathsFromUris(uris, repoRoot);
             if (filePaths.length === 0) {
                 vscode.window.showInformationMessage('XLens: No files to add.');
                 return;
@@ -810,7 +793,17 @@ async function doRefresh() {
 
     try {
         const cfg = getConfig();
-        const baseBranch = getResolvedBaseBranch();
+
+        // Load preset once if in preset mode (avoid double-load)
+        let presetBaseBranch: string | undefined;
+        if (provider.getViewMode() === 'preset' && provider.getActivePresetName()) {
+            try {
+                const preset = loadPreset(repoRoot, provider.getActivePresetName()!);
+                presetBaseBranch = preset.baseBranch;
+            } catch { /* ignore */ }
+        }
+
+        const baseBranch = getResolvedBaseBranch(presetBaseBranch ? { baseBranch: presetBaseBranch } : undefined);
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) { return; }
 
