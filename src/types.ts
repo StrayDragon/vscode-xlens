@@ -2,6 +2,8 @@ export type GitFileStatus = 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U' | '?';
 
 export type StatusDisplayMode = 'badge' | 'description' | 'hidden';
 
+export type ViewMode = 'live' | 'preset';
+
 export const VALID_STATUSES = new Set<string>(['A', 'M', 'D', 'R', 'C', 'T', 'U', '?']);
 
 export interface DiffEntry {
@@ -23,6 +25,23 @@ export interface FileNode {
     name: string;
     relativePath: string;
     status: GitFileStatus;
+    /** True when the file is in the active preset but has no live git status (clean/unchanged) */
+    isClean?: boolean;
+    /** True when the file is in the active preset but doesn't exist on disk */
+    isMissing?: boolean;
 }
 
 export type TreeNode = FolderNode | FileNode;
+
+export interface PresetMeta {
+    name: string;
+    description: string;
+    fileCount: number;
+    baseBranch?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface Preset extends PresetMeta {
+    files: string[];
+}
