@@ -1,8 +1,8 @@
 {
   "name": "vscode-xlens",
   "displayName": "XLens",
-  "description": "Developer lens for monorepo workflows — changed files tree, diff explorer, and more",
-  "version": "0.1.0",
+  "description": "Developer lens for monorepo workflows — changed files tree, diff explorer, presets, and more",
+  "version": "0.2.0",
   "publisher": "l8ng",
   "license": "MIT",
   "icon": "icon.png",
@@ -21,7 +21,9 @@
     "diff",
     "changed files",
     "monorepo",
-    "tree view"
+    "tree view",
+    "presets",
+    "bookmarks"
   ],
   "galleryBanner": {
     "color": "#1e1e1e",
@@ -36,7 +38,7 @@
       "explorer": [
         {
           "id": "gitDiffExplorerView",
-          "name": "XLens: Changed Files",
+          "name": "XLens",
           "icon": "resources/diff-icon.svg"
         }
       ]
@@ -46,6 +48,30 @@
         "command": "gitDiffExplorer.refresh",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "xlens.showPresets",
+        "title": "Presets",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "xlens.preset.switchToLive",
+        "title": "XLens: Switch to Live View"
+      },
+      {
+        "command": "xlens.preset.addFiles",
+        "title": "Add to Preset",
+        "icon": "$(add)"
+      },
+      {
+        "command": "xlens.preset.addFilesFromExplorer",
+        "title": "Add to XLens Preset",
+        "icon": "$(add)"
+      },
+      {
+        "command": "xlens.preset.removeFiles",
+        "title": "Remove from Preset",
+        "icon": "$(remove)"
       },
       {
         "command": "gitDiffExplorer.openDiff",
@@ -77,32 +103,44 @@
       },
       {
         "command": "gitDiffExplorer.revealActiveFile",
-        "title": "Reveal in XLens Changed Files",
+        "title": "Reveal in XLens",
         "icon": "$(target)"
       }
     ],
     "menus": {
       "view/title": [
         {
+          "command": "xlens.showPresets",
+          "when": "view == gitDiffExplorerView",
+          "group": "navigation@1"
+        },
+        {
           "command": "gitDiffExplorer.refresh",
           "when": "view == gitDiffExplorerView",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "gitDiffExplorer.changeBaseBranch",
           "when": "view == gitDiffExplorerView",
-          "group": "navigation"
+          "group": "navigation@3"
         },
         {
           "command": "gitDiffExplorer.revealActiveFile",
           "when": "view == gitDiffExplorerView",
-          "group": "navigation"
+          "group": "navigation@4"
         }
       ],
       "editor/title/context": [
         {
           "command": "gitDiffExplorer.revealActiveFile",
           "group": "1_open"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "xlens.preset.addFilesFromExplorer",
+          "when": "resourceScheme == file",
+          "group": "2_workspace"
         }
       ],
       "view/item/context": [
@@ -117,19 +155,29 @@
           "group": "1_open"
         },
         {
+          "command": "xlens.preset.removeFiles",
+          "when": "view == gitDiffExplorerView && viewItem =~ /_inPreset/",
+          "group": "1_preset"
+        },
+        {
+          "command": "xlens.preset.addFiles",
+          "when": "view == gitDiffExplorerView",
+          "group": "1_preset"
+        },
+        {
           "command": "gitDiffExplorer.newFile",
-          "when": "view == gitDiffExplorerView && viewItem == folder",
-          "group": "1_open"
+          "when": "view == gitDiffExplorerView && viewItem =~ /folder/",
+          "group": "2_new"
         },
         {
           "command": "gitDiffExplorer.revealInExplorer",
           "when": "view == gitDiffExplorerView",
-          "group": "2_nav"
+          "group": "3_nav"
         },
         {
           "command": "gitDiffExplorer.copyPath",
           "when": "view == gitDiffExplorerView",
-          "group": "3_copy"
+          "group": "4_copy"
         }
       ]
     },
