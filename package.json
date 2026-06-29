@@ -30,6 +30,7 @@
     "theme": "dark"
   },
   "activationEvents": [
+    "onStartupFinished",
     "onView:gitDiffExplorerView"
   ],
   "main": "./dist/extension.js",
@@ -45,7 +46,7 @@
     },
     "commands": [
       {
-        "command": "gitDiffExplorer.refresh",
+        "command": "xlens.gitDiffView.refresh",
         "title": "Refresh",
         "icon": "$(refresh)"
       },
@@ -74,35 +75,35 @@
         "icon": "$(remove)"
       },
       {
-        "command": "gitDiffExplorer.openDiff",
+        "command": "xlens.gitDiffView.openDiff",
         "title": "Open Diff",
         "icon": "$(diff)"
       },
       {
-        "command": "gitDiffExplorer.openFile",
+        "command": "xlens.gitDiffView.openFile",
         "title": "Open File"
       },
       {
-        "command": "gitDiffExplorer.copyPath",
+        "command": "xlens.gitDiffView.copyPath",
         "title": "Copy Relative Path"
       },
       {
-        "command": "gitDiffExplorer.changeBaseBranch",
+        "command": "xlens.gitDiffView.changeBaseBranch",
         "title": "Change Base Branch",
         "icon": "$(git-branch)"
       },
       {
-        "command": "gitDiffExplorer.newFile",
+        "command": "xlens.gitDiffView.newFile",
         "title": "New File",
         "icon": "$(new-file)"
       },
       {
-        "command": "gitDiffExplorer.revealInExplorer",
+        "command": "xlens.gitDiffView.revealInExplorer",
         "title": "Reveal in File Explorer",
         "icon": "$(file-symlink-file)"
       },
       {
-        "command": "gitDiffExplorer.revealActiveFile",
+        "command": "xlens.gitDiffView.revealActiveFile",
         "title": "Reveal in XLens",
         "icon": "$(target)"
       }
@@ -115,24 +116,24 @@
           "group": "navigation@1"
         },
         {
-          "command": "gitDiffExplorer.refresh",
+          "command": "xlens.gitDiffView.refresh",
           "when": "view == gitDiffExplorerView",
           "group": "navigation@2"
         },
         {
-          "command": "gitDiffExplorer.changeBaseBranch",
+          "command": "xlens.gitDiffView.changeBaseBranch",
           "when": "view == gitDiffExplorerView",
           "group": "navigation@3"
         },
         {
-          "command": "gitDiffExplorer.revealActiveFile",
+          "command": "xlens.gitDiffView.revealActiveFile",
           "when": "view == gitDiffExplorerView",
           "group": "navigation@4"
         }
       ],
       "editor/title/context": [
         {
-          "command": "gitDiffExplorer.revealActiveFile",
+          "command": "xlens.gitDiffView.revealActiveFile",
           "group": "1_open"
         }
       ],
@@ -145,12 +146,12 @@
       ],
       "view/item/context": [
         {
-          "command": "gitDiffExplorer.openDiff",
+          "command": "xlens.gitDiffView.openDiff",
           "when": "view == gitDiffExplorerView && viewItem =~ /^file_/",
           "group": "inline"
         },
         {
-          "command": "gitDiffExplorer.openFile",
+          "command": "xlens.gitDiffView.openFile",
           "when": "view == gitDiffExplorerView && viewItem =~ /^file_/",
           "group": "1_open"
         },
@@ -165,17 +166,17 @@
           "group": "1_preset"
         },
         {
-          "command": "gitDiffExplorer.newFile",
+          "command": "xlens.gitDiffView.newFile",
           "when": "view == gitDiffExplorerView && viewItem =~ /folder/",
           "group": "2_new"
         },
         {
-          "command": "gitDiffExplorer.revealInExplorer",
+          "command": "xlens.gitDiffView.revealInExplorer",
           "when": "view == gitDiffExplorerView",
           "group": "3_nav"
         },
         {
-          "command": "gitDiffExplorer.copyPath",
+          "command": "xlens.gitDiffView.copyPath",
           "when": "view == gitDiffExplorerView",
           "group": "4_copy"
         }
@@ -184,41 +185,45 @@
     "configuration": {
       "title": "XLens",
       "properties": {
-        "gitDiffExplorer.baseBranch": {
+        "xlens.gitDiffView.baseBranch": {
           "type": "string",
           "default": "",
-          "description": "Base branch to compare against. Leave empty to auto-detect (tries master → main → develop → trunk)."
+          "description": "Base branch for XLens git diff view. Leave empty to auto-detect (master → main → develop → trunk)."
         },
-        "gitDiffExplorer.filterPrefix": {
+        "xlens.gitDiffView.filterPrefix": {
           "type": "string",
           "default": "",
-          "description": "Manual filter prefix. Leave empty to auto-detect from workspace folder path relative to git root."
+          "description": "Path prefix filter for XLens git diff view. Leave empty to auto-detect from workspace folder relative to git root."
         },
-        "gitDiffExplorer.autoRefresh": {
+        "xlens.gitDiffView.autoRefresh": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically refresh when files change or git state updates"
+          "description": "Automatically refresh XLens git diff view when files change or git state updates."
         },
-        "gitDiffExplorer.refreshDebounce": {
+        "xlens.gitDiffView.refreshDebounce": {
           "type": "number",
           "default": 2000,
-          "description": "Debounce interval in milliseconds for auto-refresh"
+          "description": "Debounce interval in milliseconds for XLens git diff view auto-refresh."
         },
-        "gitDiffExplorer.autoReveal": {
+        "xlens.gitDiffView.autoReveal": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-reveal and expand the current editor file in the tree"
+          "description": "Auto-reveal and expand the active editor file in the XLens git diff tree."
         },
-        "gitDiffExplorer.statusDisplay": {
+        "xlens.gitDiffView.statusDisplay": {
           "type": "string",
           "default": "badge",
-          "enum": ["badge", "description", "hidden"],
+          "enum": [
+            "badge",
+            "description",
+            "hidden"
+          ],
           "enumDescriptions": [
             "Show git status as a colored badge decoration after the file name",
             "Show git status as description text next to the file name",
             "Hide git status indicators entirely"
           ],
-          "description": "How to display git status for changed files"
+          "description": "How XLens git diff view displays git status for changed files."
         }
       }
     }
@@ -238,14 +243,15 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.105.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
+    "@types/vscode": "^1.105.1",
     "@vscode/vsce": "^3.7.1",
-    "typescript-eslint": "^8.48.1",
-    "eslint": "^9.39.1",
     "esbuild": "^0.27.1",
+    "eslint": "^9.39.1",
     "npm-run-all": "^4.1.5",
-    "typescript": "^5.9.3"
-  }
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.1"
+  },
+  "packageManager": "pnpm@10.29.2+sha512.bef43fa759d91fd2da4b319a5a0d13ef7a45bb985a3d7342058470f9d2051a3ba8674e629672654686ef9443ad13a82da2beb9eeb3e0221c87b8154fff9d74b8"
 }

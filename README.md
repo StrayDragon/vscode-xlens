@@ -43,25 +43,33 @@ git diff <base-branch> --name-status -- <workspace-prefix>
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `gitDiffExplorer.baseBranch` | `""` | 基线分支，空则自动检测 |
-| `gitDiffExplorer.filterPrefix` | `""` | 路径前缀，空则自动检测 |
-| `gitDiffExplorer.autoRefresh` | `true` | 文件保存或 git 状态变化时自动刷新 |
-| `gitDiffExplorer.refreshDebounce` | `2000` | 自动刷新防抖（毫秒） |
-| `gitDiffExplorer.autoReveal` | `false` | 切换编辑器时自动在树中展开对应路径 |
-| `gitDiffExplorer.statusDisplay` | `"badge"` | git 状态显示方式：`badge` / `description` / `hidden` |
+| `xlens.gitDiffView.baseBranch` | `""` | 基线分支，空则自动检测 |
+| `xlens.gitDiffView.filterPrefix` | `""` | 路径前缀，空则自动检测 |
+| `xlens.gitDiffView.autoRefresh` | `true` | 文件保存或 git 状态变化时自动刷新 |
+| `xlens.gitDiffView.refreshDebounce` | `2000` | 自动刷新防抖（毫秒） |
+| `xlens.gitDiffView.autoReveal` | `false` | 切换编辑器时自动在树中展开对应路径 |
+| `xlens.gitDiffView.statusDisplay` | `"badge"` | git 状态显示方式：`badge` / `description` / `hidden` |
 
 ## 命令
 
+命令 ID 统一为 `xlens.gitDiffView.*` / `xlens.preset.*` 前缀。
+
 | 命令 | 触发位置 |
 |------|----------|
-| Refresh | 树视图标题栏 |
-| Change Base Branch | 树视图标题栏，从候选列表选择 |
-| Open Diff | 文件右键，和基线分支比较 |
+| Presets | XLens 树视图标题栏 |
+| Refresh (`xlens.gitDiffView.refresh`) | 树视图标题栏 |
+| Change Base Branch | 树视图标题栏 |
+| Open Diff | 文件右键 |
 | Open File | 文件点击 / 右键 |
 | Copy Relative Path | 文件/文件夹右键 |
 | Reveal in File Explorer | 文件/文件夹右键 |
-| New File | 文件夹右键，自动创建中间目录 |
-| Reveal in XLens Changed Files | 编辑器标题右键 / 树视图标题栏 |
+| New File | 文件夹右键 |
+| Reveal in XLens | 编辑器标题右键 / 树视图标题栏 |
+
+### Presets
+
+- **Save Current Files as Preset**：保存当前所有变更文件
+- **Create Custom Preset**：弹出临时 Webview 页面，展示完整项目文件树（可折叠、可勾选、可搜索），Confirm 后命名保存
 
 ## 文件状态标记
 

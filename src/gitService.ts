@@ -101,3 +101,34 @@ export async function getDiffEntries(
 
     return entries;
 }
+
+/**
+ * List tracked and untracked (non-ignored) files under an optional path prefix.
+ */
+export async function listRepoFiles(repoRoot: string, filterPrefix: string): Promise<string[]> {
+    const prefixArg = filterPrefix ? ` -- ${filterPrefix}` : '';
+    const trackedOutput = await execAsync(
+        `git -c core.quotePath=false ls-files${prefixArg}`,
+        repoRoot,
+    );
+
+    let untrackedOutput = '';
+    try {
+        untrackedOutput = await execAsync(
+            `git -c core.quotePath=false ls-files --others --exclude-standard${prefixArg}`,
+            repoRoot,
+        );
+    } catch {
+        // No untracked files or git error — ignore
+    }
+
+    const files = new Set<string>();
+    for (const line of `${trackedOutput}\n${untrackedOutput}`.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed) {
+            files.add(trimmed);
+        }
+    }
+
+    return [...files].sort();
+}

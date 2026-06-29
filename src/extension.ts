@@ -3,9 +3,9 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { GitDiffTreeProvider } from './treeProvider';
-import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName } from './gitService';
+import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listRepoFiles } from './gitService';
 import { GitStatusDecorationProvider } from './decorationProvider';
-import { TreeNode, StatusDisplayMode, ViewMode, FileNode, FolderNode } from './types';
+import { TreeNode } from './types';
 import {
     ensurePresetDir,
     listPresets,
@@ -17,6 +17,8 @@ import {
     removeFilesFromPreset,
     updatePresetDescription,
 } from './presetService';
+import { readGitDiffViewConfig, affectsGitDiffViewConfiguration, updateGitDiffViewSetting, migrateLegacyGitDiffViewConfig } from './config';
+import { pickFilesForCustomPreset } from './presetPicker';
 
 const TEMP_DIR = path.join(os.tmpdir(), 'xlens-diff');
 
@@ -29,25 +31,10 @@ let detectedBaseBranch: string | undefined;
 let configCache: Config | undefined;
 let contextRef: vscode.ExtensionContext | undefined;
 
-interface Config {
-    autoReveal: boolean;
-    autoRefresh: boolean;
-    refreshDebounce: number;
-    baseBranch: string;
-    filterPrefix: string;
-    statusDisplay: StatusDisplayMode;
-}
+type Config = ReturnType<typeof readGitDiffViewConfig>;
 
 function readConfig(): Config {
-    const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-    return {
-        autoReveal: config.get<boolean>('autoReveal', false),
-        autoRefresh: config.get<boolean>('autoRefresh', true),
-        refreshDebounce: config.get<number>('refreshDebounce', 2000),
-        baseBranch: config.get<string>('baseBranch', ''),
-        filterPrefix: config.get<string>('filterPrefix', ''),
-        statusDisplay: config.get<StatusDisplayMode>('statusDisplay', 'badge'),
-    };
+    return readGitDiffViewConfig();
 }
 
 function getConfig(): Config {
@@ -173,8 +160,14 @@ async function showPresetsQuickPick(): Promise<void> {
 
     items.push({
         label: '$(save) Save Current Files as Preset...',
-        description: '',
+        description: 'Save all changed files',
         presetName: '__save__',
+    });
+
+    items.push({
+        label: '$(list-selection) Create Custom Preset...',
+        description: 'Browse project files and pick what to watch',
+        presetName: '__custom__',
     });
 
     if (isPresetMode && activeName) {
@@ -183,7 +176,7 @@ async function showPresetsQuickPick(): Promise<void> {
             presetName: '__edit_desc__',
         });
         items.push({
-            label: '$(symbol-rename) Rename Preset...',
+            label: '$(pencil) Rename Preset...',
             presetName: '__rename__',
         });
     }
@@ -211,6 +204,9 @@ async function showPresetsQuickPick(): Promise<void> {
         case '__save__':
             await saveCurrentAsPreset();
             break;
+        case '__custom__':
+            await createCustomPreset();
+            break;
         case '__edit_desc__':
             await editPresetDescription();
             break;
@@ -227,17 +223,38 @@ async function showPresetsQuickPick(): Promise<void> {
 
 // ── Save / Switch / Delete / Rename / Edit flows ────────────
 
-async function saveCurrentAsPreset(): Promise<void> {
-    if (!repoRoot || !provider) { return; }
+async function createCustomPreset(): Promise<void> {
+    if (!repoRoot) { return; }
 
-    const entries = provider.getCurrentEntries();
-    if (entries.length === 0) {
-        vscode.window.showWarningMessage('XLens: No changed files to save.');
+    const cfg = getConfig();
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) { return; }
+
+    const filterPrefix = getFilterPrefix(
+        workspaceFolders[0].uri.fsPath,
+        repoRoot,
+        cfg.filterPrefix,
+    );
+
+    let allFiles: string[];
+    try {
+        allFiles = await listRepoFiles(repoRoot, filterPrefix);
+    } catch (err) {
+        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
         return;
     }
 
+    const selectedFiles = await pickFilesForCustomPreset(allFiles);
+    if (!selectedFiles) { return; }
+
+    await savePresetWithFiles(selectedFiles, 'Preset name for watched files');
+}
+
+async function savePresetWithFiles(files: string[], namePrompt: string): Promise<void> {
+    if (!repoRoot || !provider) { return; }
+
     const name = await vscode.window.showInputBox({
-        prompt: 'Preset name',
+        prompt: namePrompt,
         placeHolder: 'e.g. feature-auth',
         validateInput: (val) => {
             if (!val.trim()) { return 'Name is required'; }
@@ -246,7 +263,6 @@ async function saveCurrentAsPreset(): Promise<void> {
     });
     if (!name) { return; }
 
-    // Check for conflict
     const presets = listPresets(repoRoot);
     const existingNames = new Set(presets.map(p => p.name));
     if (existingNames.has(name)) {
@@ -265,13 +281,26 @@ async function saveCurrentAsPreset(): Promise<void> {
     });
 
     try {
-        const files = entries.map(e => e.path);
         const preset = createPreset(repoRoot, name, files, description ?? undefined);
         await switchToPreset(preset.name);
-        vscode.window.showInformationMessage(`XLens: Preset "${name}" saved with ${files.length} files.`);
+        vscode.window.showInformationMessage(
+            `XLens: Preset "${name}" saved with ${files.length} file(s).`,
+        );
     } catch (err) {
         vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
     }
+}
+
+async function saveCurrentAsPreset(): Promise<void> {
+    if (!repoRoot || !provider) { return; }
+
+    const entries = provider.getCurrentEntries();
+    if (entries.length === 0) {
+        vscode.window.showWarningMessage('XLens: No changed files to save.');
+        return;
+    }
+
+    await savePresetWithFiles(entries.map(e => e.path), 'Preset name');
 }
 
 async function switchToPreset(name: string): Promise<void> {
@@ -386,8 +415,236 @@ function updateViewTitle(): void {
 
 // ── Activate ────────────────────────────────────────────────
 
+function registerAllCommands(context: vscode.ExtensionContext): void {
+    context.subscriptions.push(
+        vscode.commands.registerCommand('xlens.gitDiffView.refresh', () => doRefresh()),
+        vscode.commands.registerCommand('xlens.showPresets', () => showPresetsQuickPick()),
+        vscode.commands.registerCommand('xlens.preset.switchToLive', () => switchToLive()),
+        vscode.commands.registerCommand('xlens.preset.addFiles', async (clicked: TreeNode, selected?: TreeNode[]) => {
+            if (!repoRoot || !provider) { return; }
+
+            const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
+            const filePaths = collectFilePathsFromNodes(nodes);
+            if (filePaths.length === 0) {
+                vscode.window.showInformationMessage('XLens: No files to add.');
+                return;
+            }
+
+            let targetPreset: string;
+
+            if (provider.getViewMode() === 'preset' && provider.getActivePresetName()) {
+                targetPreset = provider.getActivePresetName()!;
+            } else {
+                const presets = listPresets(repoRoot);
+                if (presets.length === 0) {
+                    const create = await vscode.window.showInformationMessage(
+                        'No presets yet. Create one?',
+                        'Create',
+                    );
+                    if (create === 'Create') {
+                        await saveCurrentAsPreset();
+                    }
+                    return;
+                }
+
+                const picks = presets.map(p => ({
+                    label: p.name,
+                    description: `${p.fileCount} files`,
+                    presetName: p.name,
+                }));
+
+                const pick = await vscode.window.showQuickPick(picks, {
+                    placeHolder: 'Select preset to add files to...',
+                });
+                if (!pick) { return; }
+                targetPreset = pick.presetName;
+            }
+
+            try {
+                addFilesToPreset(repoRoot, targetPreset, filePaths);
+
+                if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === targetPreset) {
+                    await doRefresh();
+                }
+
+                vscode.window.showInformationMessage(
+                    `XLens: Added ${filePaths.length} file(s) to preset "${targetPreset}".`,
+                );
+            } catch (err) {
+                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }),
+        vscode.commands.registerCommand('xlens.preset.addFilesFromExplorer', async (clicked: vscode.Uri, selected?: vscode.Uri[]) => {
+            if (!repoRoot || !provider) { return; }
+
+            const uris: vscode.Uri[] = selected && selected.length > 0 ? selected : [clicked];
+            const filePaths = await collectFilePathsFromUris(uris, repoRoot);
+            if (filePaths.length === 0) {
+                vscode.window.showInformationMessage('XLens: No files to add.');
+                return;
+            }
+
+            const presets = listPresets(repoRoot);
+            if (presets.length === 0) {
+                const create = await vscode.window.showInformationMessage(
+                    'No presets yet. Create one?',
+                    'Create',
+                );
+                if (create === 'Create') {
+                    await saveCurrentAsPreset();
+                }
+                return;
+            }
+
+            const picks = presets.map(p => ({
+                label: p.name,
+                description: `${p.fileCount} files`,
+                presetName: p.name,
+            }));
+
+            const pick = await vscode.window.showQuickPick(picks, {
+                placeHolder: `Add ${filePaths.length} file(s) to preset...`,
+            });
+            if (!pick) { return; }
+
+            try {
+                addFilesToPreset(repoRoot, pick.presetName, filePaths);
+
+                if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === pick.presetName) {
+                    await doRefresh();
+                }
+
+                vscode.window.showInformationMessage(
+                    `XLens: Added ${filePaths.length} file(s) to preset "${pick.presetName}".`,
+                );
+            } catch (err) {
+                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }),
+        vscode.commands.registerCommand('xlens.preset.removeFiles', async (clicked: TreeNode, selected?: TreeNode[]) => {
+            if (!repoRoot || !provider) { return; }
+            const activeName = provider.getActivePresetName();
+            if (!activeName) { return; }
+
+            const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
+            const filePaths = nodes
+                .filter(n => n.type === 'file')
+                .map(n => n.relativePath);
+
+            if (filePaths.length === 0) {
+                vscode.window.showInformationMessage('XLens: No files to remove.');
+                return;
+            }
+
+            try {
+                removeFilesFromPreset(repoRoot, activeName, filePaths);
+                await doRefresh();
+                vscode.window.showInformationMessage(
+                    `XLens: Removed ${filePaths.length} file(s) from preset "${activeName}".`,
+                );
+            } catch (err) {
+                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.openDiff', async (node: TreeNode) => {
+            if (!repoRoot || node.type !== 'file') { return; }
+            const baseBranch = getResolvedBaseBranch();
+            const currentPath = path.join(repoRoot, node.relativePath);
+
+            let baseContent: string;
+            try {
+                baseContent = await execAsync(
+                    `git show ${baseBranch}:${node.relativePath}`,
+                    repoRoot,
+                );
+            } catch {
+                vscode.window.showInformationMessage(
+                    `XLens: This file does not exist on ${baseBranch}. Opening current version instead.`,
+                );
+                vscode.window.showTextDocument(vscode.Uri.file(currentPath));
+                return;
+            }
+
+            fs.mkdirSync(TEMP_DIR, { recursive: true });
+            const safeName = node.relativePath.replace(/[\/\\]/g, '_');
+            const tempPath = path.join(TEMP_DIR, `${baseBranch}...${safeName}`);
+            fs.writeFileSync(tempPath, baseContent);
+
+            const baseUri = vscode.Uri.file(tempPath);
+            const currentUri = vscode.Uri.file(currentPath);
+            const title = `${node.relativePath} (${baseBranch} ↔ Current)`;
+            vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title).then(undefined, () => {});
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.openFile', (node?: TreeNode) => {
+            if (!repoRoot || !node || node.type !== 'file') { return; }
+            const filePath = path.join(repoRoot, node.relativePath);
+            vscode.window.showTextDocument(vscode.Uri.file(filePath));
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.copyPath', (node: TreeNode) => {
+            vscode.env.clipboard.writeText(node.relativePath);
+            vscode.window.showInformationMessage(`Copied: ${node.relativePath}`);
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.changeBaseBranch', async () => {
+            const current = getResolvedBaseBranch();
+            const picks = ['master', 'main', 'develop', 'trunk'].map(b => ({
+                label: b,
+                description: b === current ? '$(check) current' : '',
+            }));
+            const input = await vscode.window.showQuickPick(picks, {
+                placeHolder: `Current: ${current}. Select base branch...`,
+            });
+            if (input && input.label !== current) {
+                detectedBaseBranch = input.label;
+                await updateGitDiffViewSetting('baseBranch', input.label);
+                doRefresh();
+            }
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.newFile', async (node: TreeNode) => {
+            if (!repoRoot || node.type !== 'folder') { return; }
+            const fileName = await vscode.window.showInputBox({
+                prompt: `New file under ${node.relativePath || '/'}`,
+                placeHolder: 'e.g. utils.ts, sub/dir/file.ts',
+            });
+            if (!fileName) { return; }
+            const filePath = path.resolve(repoRoot, node.relativePath, fileName);
+            if (!filePath.startsWith(repoRoot + path.sep) && filePath !== repoRoot) {
+                vscode.window.showErrorMessage('XLens: Path is outside the repository.');
+                return;
+            }
+            const dir = path.dirname(filePath);
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(filePath, '');
+            await vscode.window.showTextDocument(vscode.Uri.file(filePath));
+            scheduleRefresh();
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.revealInExplorer', (node: TreeNode) => {
+            if (!repoRoot) { return; }
+            const filePath = path.join(repoRoot, node.relativePath);
+            vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(filePath)).then(undefined, () => {});
+        }),
+        vscode.commands.registerCommand('xlens.gitDiffView.revealActiveFile', async () => {
+            if (!provider || !repoRoot || !treeView) { return; }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { return; }
+            const filePath = editor.document.uri.fsPath;
+            const rel = path.relative(repoRoot, filePath);
+            provider.setActivePath(rel || undefined);
+            const node = provider.findNodeByAbsPath(filePath);
+            if (node) {
+                await treeView.reveal(node, { select: true, focus: true, expand: 3 }).then(undefined, () => {});
+            } else {
+                vscode.window.showInformationMessage('XLens: File not found in changed files.');
+            }
+        }),
+    );
+}
+
 export async function activate(context: vscode.ExtensionContext) {
     contextRef = context;
+    configCache = readConfig();
+
+    await migrateLegacyGitDiffViewConfig(context);
+    registerAllCommands(context);
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -410,8 +667,6 @@ export async function activate(context: vscode.ExtensionContext) {
     } catch {
         // Not critical
     }
-
-    configCache = readConfig();
 
     provider = new GitDiffTreeProvider(repoRoot);
     decorationProvider = new GitStatusDecorationProvider(repoRoot);
@@ -453,274 +708,6 @@ export async function activate(context: vscode.ExtensionContext) {
     await doRefresh();
     updateViewTitle();
 
-    // ── Commands ────────────────────────────────────────────
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.refresh', () => doRefresh()),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('xlens.showPresets', () => showPresetsQuickPick()),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('xlens.preset.switchToLive', () => switchToLive()),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('xlens.preset.addFiles', async (clicked: TreeNode, selected?: TreeNode[]) => {
-            if (!repoRoot || !provider) { return; }
-
-            // Collect nodes: if multi-selected, use selected array; otherwise use the single clicked node
-            const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = collectFilePathsFromNodes(nodes);
-            if (filePaths.length === 0) {
-                vscode.window.showInformationMessage('XLens: No files to add.');
-                return;
-            }
-
-            // Determine target preset
-            let targetPreset: string;
-
-            if (provider.getViewMode() === 'preset' && provider.getActivePresetName()) {
-                // Auto-add to active preset
-                targetPreset = provider.getActivePresetName()!;
-            } else {
-                // Show preset picker
-                const presets = listPresets(repoRoot);
-                if (presets.length === 0) {
-                    const create = await vscode.window.showInformationMessage(
-                        'No presets yet. Create one?',
-                        'Create',
-                    );
-                    if (create === 'Create') {
-                        await saveCurrentAsPreset();
-                    }
-                    return;
-                }
-
-                const picks = presets.map(p => ({
-                    label: p.name,
-                    description: `${p.fileCount} files`,
-                    presetName: p.name,
-                }));
-
-                const pick = await vscode.window.showQuickPick(picks, {
-                    placeHolder: 'Select preset to add files to...',
-                });
-                if (!pick) { return; }
-                targetPreset = pick.presetName;
-            }
-
-            try {
-                addFilesToPreset(repoRoot, targetPreset, filePaths);
-
-                // If we're currently viewing this preset, refresh
-                if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === targetPreset) {
-                    await doRefresh();
-                }
-
-                vscode.window.showInformationMessage(
-                    `XLens: Added ${filePaths.length} file(s) to preset "${targetPreset}".`,
-                );
-            } catch (err) {
-                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-            }
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('xlens.preset.addFilesFromExplorer', async (clicked: vscode.Uri, selected?: vscode.Uri[]) => {
-            if (!repoRoot || !provider) { return; }
-
-            const uris: vscode.Uri[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = await collectFilePathsFromUris(uris, repoRoot);
-            if (filePaths.length === 0) {
-                vscode.window.showInformationMessage('XLens: No files to add.');
-                return;
-            }
-
-            // Show preset picker
-            const presets = listPresets(repoRoot);
-            if (presets.length === 0) {
-                const create = await vscode.window.showInformationMessage(
-                    'No presets yet. Create one?',
-                    'Create',
-                );
-                if (create === 'Create') {
-                    await saveCurrentAsPreset();
-                }
-                return;
-            }
-
-            const picks = presets.map(p => ({
-                label: p.name,
-                description: `${p.fileCount} files`,
-                presetName: p.name,
-            }));
-
-            const pick = await vscode.window.showQuickPick(picks, {
-                placeHolder: `Add ${filePaths.length} file(s) to preset...`,
-            });
-            if (!pick) { return; }
-
-            try {
-                addFilesToPreset(repoRoot, pick.presetName, filePaths);
-
-                // If viewing this preset, refresh
-                if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === pick.presetName) {
-                    await doRefresh();
-                }
-
-                vscode.window.showInformationMessage(
-                    `XLens: Added ${filePaths.length} file(s) to preset "${pick.presetName}".`,
-                );
-            } catch (err) {
-                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-            }
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('xlens.preset.removeFiles', async (clicked: TreeNode, selected?: TreeNode[]) => {
-            if (!repoRoot || !provider) { return; }
-            const activeName = provider.getActivePresetName();
-            if (!activeName) { return; }
-
-            const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = nodes
-                .filter(n => n.type === 'file')
-                .map(n => n.relativePath);
-
-            if (filePaths.length === 0) {
-                vscode.window.showInformationMessage('XLens: No files to remove.');
-                return;
-            }
-
-            try {
-                removeFilesFromPreset(repoRoot, activeName, filePaths);
-                await doRefresh();
-                vscode.window.showInformationMessage(
-                    `XLens: Removed ${filePaths.length} file(s) from preset "${activeName}".`,
-                );
-            } catch (err) {
-                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-            }
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.openDiff', async (node: TreeNode) => {
-            if (!repoRoot || node.type !== 'file') { return; }
-            const baseBranch = getResolvedBaseBranch();
-            const currentPath = path.join(repoRoot, node.relativePath);
-
-            let baseContent: string;
-            try {
-                baseContent = await execAsync(
-                    `git show ${baseBranch}:${node.relativePath}`,
-                    repoRoot,
-                );
-            } catch {
-                vscode.window.showInformationMessage(
-                    `XLens: This file does not exist on ${baseBranch}. Opening current version instead.`,
-                );
-                vscode.window.showTextDocument(vscode.Uri.file(currentPath));
-                return;
-            }
-
-            fs.mkdirSync(TEMP_DIR, { recursive: true });
-            const safeName = node.relativePath.replace(/[\/\\]/g, '_');
-            const tempPath = path.join(TEMP_DIR, `${baseBranch}...${safeName}`);
-            fs.writeFileSync(tempPath, baseContent);
-
-            const baseUri = vscode.Uri.file(tempPath);
-            const currentUri = vscode.Uri.file(currentPath);
-            const title = `${node.relativePath} (${baseBranch} ↔ Current)`;
-            vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title).then(undefined, () => {});
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.openFile', (node?: TreeNode) => {
-            if (!repoRoot || !node || node.type !== 'file') { return; }
-            const filePath = path.join(repoRoot, node.relativePath);
-            vscode.window.showTextDocument(vscode.Uri.file(filePath));
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.copyPath', (node: TreeNode) => {
-            vscode.env.clipboard.writeText(node.relativePath);
-            vscode.window.showInformationMessage(`Copied: ${node.relativePath}`);
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.changeBaseBranch', async () => {
-            const current = getResolvedBaseBranch();
-            const picks = ['master', 'main', 'develop', 'trunk'].map(b => ({
-                label: b,
-                description: b === current ? '$(check) current' : '',
-            }));
-            const input = await vscode.window.showQuickPick(picks, {
-                placeHolder: `Current: ${current}. Select base branch...`,
-            });
-            if (input && input.label !== current) {
-                detectedBaseBranch = input.label;
-                const config = vscode.workspace.getConfiguration('gitDiffExplorer');
-                await config.update('baseBranch', input.label, vscode.ConfigurationTarget.Global);
-                doRefresh();
-            }
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.newFile', async (node: TreeNode) => {
-            if (!repoRoot || node.type !== 'folder') { return; }
-            const fileName = await vscode.window.showInputBox({
-                prompt: `New file under ${node.relativePath || '/'}`,
-                placeHolder: 'e.g. utils.ts, sub/dir/file.ts',
-            });
-            if (!fileName) { return; }
-            const filePath = path.resolve(repoRoot, node.relativePath, fileName);
-            if (!filePath.startsWith(repoRoot + path.sep) && filePath !== repoRoot) {
-                vscode.window.showErrorMessage('XLens: Path is outside the repository.');
-                return;
-            }
-            const dir = path.dirname(filePath);
-            fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(filePath, '');
-            await vscode.window.showTextDocument(vscode.Uri.file(filePath));
-            scheduleRefresh();
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.revealInExplorer', (node: TreeNode) => {
-            if (!repoRoot) { return; }
-            const filePath = path.join(repoRoot, node.relativePath);
-            vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(filePath)).then(undefined, () => {});
-        }),
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('gitDiffExplorer.revealActiveFile', async () => {
-            if (!provider || !repoRoot || !treeView) { return; }
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) { return; }
-            const filePath = editor.document.uri.fsPath;
-            const rel = path.relative(repoRoot, filePath);
-            provider.setActivePath(rel || undefined);
-            const node = provider.findNodeByAbsPath(filePath);
-            if (node) {
-                await treeView.reveal(node, { select: true, focus: true, expand: 3 }).then(undefined, () => {});
-            } else {
-                vscode.window.showInformationMessage('XLens: File not found in changed files.');
-            }
-        }),
-    );
-
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (!editor || !provider || !repoRoot || !treeView) { return; }
@@ -742,7 +729,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
-            if (e.affectsConfiguration('gitDiffExplorer')) {
+            if (affectsGitDiffViewConfiguration(e)) {
                 configCache = readConfig();
                 const mode = configCache.statusDisplay;
                 provider?.setDisplayMode(mode);

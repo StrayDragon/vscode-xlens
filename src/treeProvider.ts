@@ -352,7 +352,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         }
 
         item.command = {
-            command: 'gitDiffExplorer.openFile',
+            command: 'xlens.gitDiffView.openFile',
             title: 'Open File',
             arguments: [element],
         };
