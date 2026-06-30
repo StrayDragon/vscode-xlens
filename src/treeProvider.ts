@@ -348,10 +348,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         const inPresetMode = this.viewMode === 'preset';
 
         if (inPresetMode && element.isClean) {
-            // Clean/unchanged. Note: TreeItem.description does NOT render $(...) codicons,
-            // they would appear literally — so use plain text here. A circular badge is
-            // conveyed via the decorationProvider (or the "clean" label).
-            item.description = 'clean';
+            // Clean/unchanged files intentionally show no status label or badge;
+            // they are visible in the tree because the preset tracks them.
             item.tooltip = 'Not changed from base branch (tracked by preset)';
             // Keep the file-type icon by NOT overriding iconPath — VS Code resolves it from resourceUri.
         } else if (this.displayMode === 'description') {
