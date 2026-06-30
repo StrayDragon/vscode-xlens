@@ -352,26 +352,32 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     }
 
     function selectedFiles() {
-      const out = [];
+      // Minimal selection: fully-checked folders become tracked *directories*
+      // (not expanded to files), so file renames/deletes inside them are handled
+      // by re-expansion at view time. Partially-checked folders recurse.
+      const files = [];
+      const dirs = [];
       function walk(node) {
         const s = state.get(node.path);
-        if (node.kind === 'file') {
-          if (s === 'checked') out.push(node.path);
+        if (node.kind === 'folder') {
+          if (s === 'checked') { dirs.push(node.path); return; }   // track the dir itself
+          for (const c of node.children || []) walk(c);
           return;
         }
-        if (s === 'checked') {
-          collectFilePaths(node, out);
-          return;
-        }
-        for (const c of node.children || []) walk(c);
+        if (s === 'checked') files.push(node.path);              // file
       }
       for (const n of TREE) walk(n);
-      return [...new Set(out)].sort();
+      return { files: [...new Set(files)].sort(), dirs: [...new Set(dirs)].sort() };
     }
 
     function updateSummary() {
-      const count = selectedFiles().length;
-      document.getElementById('summary').textContent = count + ' selected';
+      const sel = selectedFiles();
+      const parts = [];
+      if (sel.files.length) parts.push(sel.files.length + ' file' + (sel.files.length !== 1 ? 's' : ''));
+      if (sel.dirs.length) parts.push(sel.dirs.length + ' dir' + (sel.dirs.length !== 1 ? 's' : ''));
+      const count = sel.files.length + sel.dirs.length;
+      const summary = parts.length ? parts.join(' · ') : '0 selected';
+      document.getElementById('summary').textContent = summary;
       document.getElementById('confirm').disabled = count === 0;
     }
 
@@ -522,12 +528,17 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       }, 180);
     });
 
+    function refreshAllFolders(nodes) {
+      for (const n of nodes) {
+        if (n.kind === 'folder') { refreshFolder(n); refreshAllFolders(n.children || []); }
+      }
+    }
+
     document.getElementById('select-all').onclick = () => {
-      const targets = filterText
-        ? flattenMatches(filterText)
-        : (() => { const all = []; for (const n of TREE) collectFilePaths(n, all); return all.map(p => nodeByPath.get(p)).filter(Boolean); })();
+      // No filter: check top-level nodes directly so folders become tracked dirs.
+      const targets = filterText ? flattenMatches(filterText) : TREE;
       for (const node of targets) setSubtree(node, 'checked');
-      for (const n of TREE) if (n.kind === 'folder') refreshFolder(n);
+      refreshAllFolders(TREE);
       scheduleRender();
       updateSummary();
     };
@@ -540,14 +551,21 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
 
     document.getElementById('cancel').onclick = () => vscode.postMessage({ type: 'cancel' });
     document.getElementById('confirm').onclick = () => {
-      vscode.postMessage({ type: 'confirm', files: selectedFiles() });
+      const sel = selectedFiles();
+      if (sel.files.length === 0 && sel.dirs.length === 0) return;
+      vscode.postMessage({ type: 'confirm', files: sel.files, dirs: sel.dirs });
     };
   </script>
 </body>
 </html>`;
 }
 
-export async function openPresetPickerWebview(filePaths: string[]): Promise<string[] | undefined> {
+export interface PresetSelection {
+    files: string[];
+    dirs: string[];
+}
+
+export async function openPresetPickerWebview(filePaths: string[]): Promise<PresetSelection | undefined> {
     if (filePaths.length === 0) {
         vscode.window.showWarningMessage('XLens: No files available to pick from.');
         return undefined;
@@ -565,23 +583,25 @@ export async function openPresetPickerWebview(filePaths: string[]): Promise<stri
             { enableScripts: true, retainContextWhenHidden: false },
         );
 
-        const finish = (files: string[] | undefined) => {
+        const finish = (selection: PresetSelection | undefined) => {
             if (settled) { return; }
             settled = true;
-            resolve(files);
+            resolve(selection);
             panel.dispose();
         };
 
         const nonce = String(Date.now());
         panel.webview.html = getWebviewHtml(tree, nonce);
 
-        panel.webview.onDidReceiveMessage((msg: { type: string; files?: string[] }) => {
-            if (msg.type === 'confirm' && Array.isArray(msg.files)) {
-                if (msg.files.length === 0) {
-                    vscode.window.showWarningMessage('XLens: No files selected.');
+        panel.webview.onDidReceiveMessage((msg: { type: string; files?: string[]; dirs?: string[] }) => {
+            if (msg.type === 'confirm') {
+                const files = Array.isArray(msg.files) ? msg.files : [];
+                const dirs = Array.isArray(msg.dirs) ? msg.dirs : [];
+                if (files.length === 0 && dirs.length === 0) {
+                    vscode.window.showWarningMessage('XLens: Nothing selected.');
                     return;
                 }
-                finish(msg.files);
+                finish({ files, dirs });
             } else if (msg.type === 'cancel') {
                 finish(undefined);
             }

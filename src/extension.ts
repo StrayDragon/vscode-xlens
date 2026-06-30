@@ -86,15 +86,20 @@ function collectDescendantFiles(folder: TreeNode, out: Set<string>): void {
 
 // ── Helper: collect relative paths from URIs (File Explorer context menu) ──
 
-async function collectFilePathsFromUris(uris: vscode.Uri[], repoRoot: string): Promise<string[]> {
+/** Split Explorer URIs into repo-relative directory paths and file paths.
+ *  Directories are returned as-is (to be tracked as stable dirs), NOT expanded. */
+async function collectPathsFromUris(
+    uris: vscode.Uri[],
+    repoRoot: string,
+): Promise<{ dirPaths: string[]; filePaths: string[] }> {
     const files = new Set<string>();
-    const dirs: string[] = [];
+    const dirs = new Set<string>();
 
     for (const uri of uris) {
         const absPath = uri.fsPath;
         if (!absPath.startsWith(repoRoot)) { continue; }
         const rel = path.relative(repoRoot, absPath);
-        if (rel.startsWith('..')) { continue; }
+        if (rel.startsWith('..') || rel === '') { continue; }
 
         let stat: fs.Stats;
         try {
@@ -102,25 +107,13 @@ async function collectFilePathsFromUris(uris: vscode.Uri[], repoRoot: string): P
         } catch { continue; }
 
         if (stat.isDirectory()) {
-            dirs.push(rel);
-        } else if (rel) {
+            dirs.add(rel);
+        } else {
             files.add(rel);
         }
     }
 
-    // Use git ls-files for directories to avoid recursive FS walk
-    for (const dirRel of dirs) {
-        try {
-            const prefix = dirRel ? dirRel + '/' : '';
-            const output = await execAsync(`git ls-files -- ${prefix}`, repoRoot);
-            for (const line of output.split('\n')) {
-                const trimmed = line.trim();
-                if (trimmed) { files.add(trimmed); }
-            }
-        } catch { /* skip on git error */ }
-    }
-
-    return [...files];
+    return { dirPaths: [...dirs].sort(), filePaths: [...files].sort() };
 }
 
 // ── Presets Quick Pick ──────────────────────────────────────
@@ -172,18 +165,7 @@ async function showPresetsQuickPick(): Promise<void> {
         presetName: '__custom__',
     });
 
-    items.push({
-        label: '$(folder) Track Directory...',
-        description: 'Watch a stable directory (survives file renames/deletes)',
-        presetName: '__track_dir__',
-    });
-
     if (isPresetMode && activeName) {
-        items.push({
-            label: '$(folder-opened) Untrack Directory...',
-            description: `Remove a tracked directory from "${activeName}"`,
-            presetName: '__untrack_dir__',
-        });
         items.push({
             label: '$(edit) Edit Preset Description...',
             presetName: '__edit_desc__',
@@ -219,12 +201,6 @@ async function showPresetsQuickPick(): Promise<void> {
             break;
         case '__custom__':
             await createCustomPreset();
-            break;
-        case '__track_dir__':
-            await trackDirectoryFlow();
-            break;
-        case '__untrack_dir__':
-            await untrackDirectoryFlow();
             break;
         case '__edit_desc__':
             await editPresetDescription();
@@ -263,13 +239,13 @@ async function createCustomPreset(): Promise<void> {
         return;
     }
 
-    const selectedFiles = await pickFilesForCustomPreset(allFiles);
-    if (!selectedFiles) { return; }
+    const selection = await pickFilesForCustomPreset(allFiles);
+    if (!selection) { return; }
 
-    await savePresetWithFiles(selectedFiles, 'Preset name for watched files');
+    await savePresetWithFiles(selection.files, 'Preset name for watched files', selection.dirs);
 }
 
-async function savePresetWithFiles(files: string[], namePrompt: string): Promise<void> {
+async function savePresetWithFiles(files: string[], namePrompt: string, dirs?: string[]): Promise<void> {
     if (!repoRoot || !provider) { return; }
 
     const name = await vscode.window.showInputBox({
@@ -300,168 +276,19 @@ async function savePresetWithFiles(files: string[], namePrompt: string): Promise
     });
 
     try {
-        const preset = createPreset(repoRoot, name, files, description ?? undefined);
+        const preset = createPreset(repoRoot, name, files, description ?? undefined, undefined, dirs);
         await switchToPreset(preset.name);
-        vscode.window.showInformationMessage(
-            `XLens: Preset "${name}" saved with ${files.length} file(s).`,
-        );
-    } catch (err) {
-        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-    }
-}
-
-// ── Track / Untrack directory flows ───────────────────────
-
-async function pickPresetTarget(action: string): Promise<{ kind: 'existing'; name: string } | { kind: 'new' } | undefined> {
-    if (!repoRoot) { return undefined; }
-    const presets = listPresets(repoRoot);
-    const items: (vscode.QuickPickItem & { isNew?: boolean; name?: string })[] = [
-        { label: '$(add) Create new preset...', kind: vscode.QuickPickItemKind.Default, isNew: true },
-    ];
-    if (presets.length > 0) {
-        items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
-        for (const p of presets) {
-            items.push({
-                label: p.name,
-                description: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} dir${p.dirCount !== 1 ? 's' : ''}` : ''}`,
-                name: p.name,
-            });
-        }
-    }
-    const pick = await vscode.window.showQuickPick(items, {
-        placeHolder: `${action} — select target preset`,
-    });
-    if (!pick) { return undefined; }
-    if (pick.isNew) { return { kind: 'new' }; }
-    return { kind: 'existing', name: pick.name! };
-}
-
-/** Resolve repo-relative directory paths from selected URIs or via an open dialog. */
-async function collectTrackedDirPaths(preselected?: vscode.Uri[]): Promise<string[] | undefined> {
-    if (!repoRoot) { return undefined; }
-
-    let uris: vscode.Uri[];
-    if (preselected && preselected.length > 0) {
-        uris = preselected;
-    } else {
-        const picked = await vscode.window.showOpenDialog({
-            canSelectFolders: true,
-            canSelectFiles: false,
-            canSelectMany: true,
-            defaultUri: vscode.Uri.file(repoRoot),
-            openLabel: 'Track',
-            title: 'Select directory to track in the preset',
-        });
-        if (!picked || picked.length === 0) { return undefined; }
-        uris = picked;
-    }
-
-    const dirs: string[] = [];
-    for (const uri of uris) {
-        const rel = path.relative(repoRoot, uri.fsPath);
-        if (!rel || rel === '.' || rel.startsWith('..')) { continue; }
-        // Only real directories are trackable; files are silently skipped here.
-        let stat: fs.Stats;
-        try {
-            stat = fs.statSync(uri.fsPath);
-        } catch { continue; }
-        if (!stat.isDirectory()) { continue; }
-        dirs.push(rel);
-    }
-    return dirs;
-}
-
-/** Pick folder(s) and track them in an existing preset (or create a new dir-only preset). */
-async function trackDirectoryFlow(preselected?: vscode.Uri[]): Promise<void> {
-    if (!repoRoot || !provider) { return; }
-
-    const dirs = await collectTrackedDirPaths(preselected);
-    if (!dirs || dirs.length === 0) {
-        vscode.window.showInformationMessage('XLens: No valid directory selected (must be inside the repository).');
-        return;
-    }
-
-    const target = await pickPresetTarget('Track directory');
-    if (!target) { return; }
-
-    if (target.kind === 'new') {
-        // Create a dir-only preset
-        const name = await vscode.window.showInputBox({
-            prompt: 'Preset name for this directory watch',
-            placeHolder: 'e.g. watch-src',
-            validateInput: (v) => v.trim() ? undefined : 'Name is required',
-        });
-        if (!name) { return; }
-        const existing = listPresets(repoRoot);
-        if (existing.some(p => p.name === name)) {
-            const overwrite = await vscode.window.showWarningMessage(
-                `Preset "${name}" already exists. Overwrite?`, { modal: true }, 'Overwrite',
-            );
-            if (overwrite !== 'Overwrite') { return; }
-            deletePreset(repoRoot, name);
-        }
-        const description = await vscode.window.showInputBox({
-            prompt: 'Description (optional)',
-            placeHolder: 'Brief description of this preset',
-        });
-        try {
-            createPreset(repoRoot, name, [], description ?? undefined, undefined, dirs);
-            await switchToPreset(name);
+        const fileCount = preset.files.length;
+        const dirCount = (preset.dirs ?? []).length;
+        if (dirCount > 0) {
             vscode.window.showInformationMessage(
-                `XLens: Preset "${name}" created tracking ${dirs.length} dir${dirs.length !== 1 ? 's' : ''}.`,
+                `XLens: Preset "${name}" saved — ${fileCount} file(s) · ${dirCount} dir(s) (expanded at view time).`,
             );
-        } catch (err) {
-            vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+        } else {
+            vscode.window.showInformationMessage(
+                `XLens: Preset "${name}" saved with ${fileCount} file(s).`,
+            );
         }
-        return;
-    }
-
-    // Add to existing preset
-    try {
-        addDirsToPreset(repoRoot, target.name, dirs);
-        if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === target.name) {
-            await doRefresh();
-        }
-        vscode.window.showInformationMessage(
-            `XLens: Tracking ${dirs.length} dir${dirs.length !== 1 ? 's' : ''} in preset "${target.name}".`,
-        );
-    } catch (err) {
-        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-    }
-}
-
-/** Pick a tracked directory of the active preset to stop tracking. */
-async function untrackDirectoryFlow(): Promise<void> {
-    if (!repoRoot || !provider) { return; }
-    const activeName = provider.getActivePresetName();
-    if (!activeName) { return; }
-
-    let preset: ReturnType<typeof loadPreset>;
-    try {
-        preset = loadPreset(repoRoot, activeName);
-    } catch (err) {
-        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-    }
-    const tracked = preset.dirs ?? [];
-    if (tracked.length === 0) {
-        vscode.window.showInformationMessage(`XLens: Preset "${activeName}" tracks no directories.`);
-        return;
-    }
-
-    const picks = tracked.map(d => ({ label: d, dir: d }));
-    const pick = await vscode.window.showQuickPick(picks, {
-        canPickMany: true,
-        placeHolder: `Select directories to untrack from "${activeName}"`,
-    });
-    if (!pick || pick.length === 0) { return; }
-
-    try {
-        removeDirsFromPreset(repoRoot, activeName, pick.map(p => p.dir));
-        await doRefresh();
-        vscode.window.showInformationMessage(
-            `XLens: Untracked ${pick.length} dir${pick.length !== 1 ? 's' : ''} from preset "${activeName}".`,
-        );
     } catch (err) {
         vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -600,9 +427,11 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             if (!repoRoot || !provider) { return; }
 
             const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = collectFilePathsFromNodes(nodes);
-            if (filePaths.length === 0) {
-                vscode.window.showInformationMessage('XLens: No files to add.');
+            // Folders → tracked directories (stable). Files → explicit tracked paths.
+            const dirPaths = nodes.filter(n => n.type === 'folder').map(n => n.relativePath);
+            const filePaths = collectFilePathsFromNodes(nodes.filter(n => n.type === 'file'));
+            if (dirPaths.length === 0 && filePaths.length === 0) {
+                vscode.window.showInformationMessage('XLens: Nothing to add.');
                 return;
             }
 
@@ -625,42 +454,47 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
 
                 const picks = presets.map(p => ({
                     label: p.name,
-                    description: `${p.fileCount} files`,
+                    description: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} dir${p.dirCount !== 1 ? 's' : ''}` : ''}`,
                     presetName: p.name,
                 }));
 
                 const pick = await vscode.window.showQuickPick(picks, {
-                    placeHolder: 'Select preset to add files to...',
+                    placeHolder: 'Select preset to add to...',
                 });
                 if (!pick) { return; }
                 targetPreset = pick.presetName;
             }
 
             try {
-                addFilesToPreset(repoRoot, targetPreset, filePaths);
+                if (filePaths.length > 0) {
+                    addFilesToPreset(repoRoot, targetPreset, filePaths);
+                }
+                if (dirPaths.length > 0) {
+                    addDirsToPreset(repoRoot, targetPreset, dirPaths);
+                }
 
                 if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === targetPreset) {
                     await doRefresh();
                 }
 
+                const parts: string[] = [];
+                if (filePaths.length > 0) { parts.push(`${filePaths.length} file(s)`); }
+                if (dirPaths.length > 0) { parts.push(`${dirPaths.length} dir(s)`); }
                 vscode.window.showInformationMessage(
-                    `XLens: Added ${filePaths.length} file(s) to preset "${targetPreset}".`,
+                    `XLens: Added ${parts.join(' and ')} to preset "${targetPreset}".`,
                 );
             } catch (err) {
                 vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
             }
         }),
-        vscode.commands.registerCommand('xlens.preset.trackFolder', async (clicked: vscode.Uri, selected?: vscode.Uri[]) => {
-            const uris: vscode.Uri[] = selected && selected.length > 0 ? selected : [clicked];
-            await trackDirectoryFlow(uris);
-        }),
         vscode.commands.registerCommand('xlens.preset.addFilesFromExplorer', async (clicked: vscode.Uri, selected?: vscode.Uri[]) => {
             if (!repoRoot || !provider) { return; }
 
             const uris: vscode.Uri[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = await collectFilePathsFromUris(uris, repoRoot);
-            if (filePaths.length === 0) {
-                vscode.window.showInformationMessage('XLens: No files to add.');
+            // Directories → tracked dirs (stable); files → explicit tracked paths.
+            const { dirPaths, filePaths } = await collectPathsFromUris(uris, repoRoot);
+            if (dirPaths.length === 0 && filePaths.length === 0) {
+                vscode.window.showInformationMessage('XLens: Nothing to add.');
                 return;
             }
 
@@ -678,24 +512,33 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
 
             const picks = presets.map(p => ({
                 label: p.name,
-                description: `${p.fileCount} files`,
+                description: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} dir${p.dirCount !== 1 ? 's' : ''}` : ''}`,
                 presetName: p.name,
             }));
 
+            const total = dirPaths.length + filePaths.length;
             const pick = await vscode.window.showQuickPick(picks, {
-                placeHolder: `Add ${filePaths.length} file(s) to preset...`,
+                placeHolder: `Add ${total} item(s) to preset...`,
             });
             if (!pick) { return; }
 
             try {
-                addFilesToPreset(repoRoot, pick.presetName, filePaths);
+                if (filePaths.length > 0) {
+                    addFilesToPreset(repoRoot, pick.presetName, filePaths);
+                }
+                if (dirPaths.length > 0) {
+                    addDirsToPreset(repoRoot, pick.presetName, dirPaths);
+                }
 
                 if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === pick.presetName) {
                     await doRefresh();
                 }
 
+                const parts: string[] = [];
+                if (filePaths.length > 0) { parts.push(`${filePaths.length} file(s)`); }
+                if (dirPaths.length > 0) { parts.push(`${dirPaths.length} dir(s)`); }
                 vscode.window.showInformationMessage(
-                    `XLens: Added ${filePaths.length} file(s) to preset "${pick.presetName}".`,
+                    `XLens: Added ${parts.join(' and ')} to preset "${pick.presetName}".`,
                 );
             } catch (err) {
                 vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
@@ -707,18 +550,9 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             if (!activeName) { return; }
 
             const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
-            const filePaths = nodes
-                .filter(n => n.type === 'file')
-                .map(n => n.relativePath);
+            const folderNodes = nodes.filter((n): n is Extract<TreeNode, { type: 'folder' }> => n.type === 'folder');
+            const fileNodes = nodes.filter((n): n is Extract<TreeNode, { type: 'file' }> => n.type === 'file');
 
-            if (filePaths.length === 0) {
-                vscode.window.showInformationMessage('XLens: No files to remove.');
-                return;
-            }
-
-            // Distinguish explicitly-tracked files from files that appear only because
-            // they live under a tracked directory (which is auto-expanded and re-expanded
-            // on every refresh, so a single-file removal would be immediately undone).
             let preset: ReturnType<typeof loadPreset>;
             try {
                 preset = loadPreset(repoRoot, activeName);
@@ -727,39 +561,62 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
                 return;
             }
             const explicitSet = new Set(preset.files);
+            const trackedDirSet = new Set((preset.dirs ?? []) as string[]);
             const trackedDirs = (preset.dirs ?? []).map((d: string) => d.endsWith('/') ? d : d + '/');
-            const explicitRemovable: string[] = [];
-            const onlyByDir: string[] = [];
-            for (const fp of filePaths) {
-                if (explicitSet.has(fp)) {
-                    explicitRemovable.push(fp);
-                } else if (trackedDirs.some((d: string) => fp + '/' === d || fp.startsWith(d))) {
-                    onlyByDir.push(fp);
+
+            // Folders: if the folder itself is a tracked dir, untrack it; otherwise pull
+            // out the explicit (non-dir-derived) descendant files for removal.
+            const dirsToUntrack: string[] = [];
+            const filesToRemove: string[] = [];
+            for (const f of folderNodes) {
+                if (trackedDirSet.has(f.relativePath)) {
+                    dirsToUntrack.push(f.relativePath);
+                } else {
+                    const descendants = new Set<string>();
+                    collectDescendantFiles(f, descendants);
+                    for (const d of descendants) {
+                        if (explicitSet.has(d)) { filesToRemove.push(d); }
+                    }
                 }
-                // Files matching neither are just shown-but-untracked; silently ignore.
             }
 
-            // Nothing is explicitly removable — everything came from a tracked directory.
-            if (explicitRemovable.length === 0 && onlyByDir.length > 0) {
-                const action = await vscode.window.showWarningMessage(
-                    `${onlyByDir.length} file${onlyByDir.length !== 1 ? 's' : ''} appear in preset "${activeName}" only via tracked director${trackedDirs.length !== 1 ? 'ies' : 'y'}. Remove a tracked directory instead?`,
-                    { modal: true },
-                    'Untrack directory…',
-                );
-                if (action === 'Untrack directory…') {
-                    await untrackDirectoryFlow();
+            // Files: only explicitly-tracked ones are removable individually. Files that
+            // appear here merely because an ancestor directory is tracked can't be removed
+            // individually (they'd reappear on the next refresh) — point the user at the dir.
+            const dirCovered: string[] = [];
+            for (const fn of fileNodes) {
+                if (explicitSet.has(fn.relativePath)) {
+                    filesToRemove.push(fn.relativePath);
+                } else if (trackedDirs.some((d: string) => fn.relativePath + '/' === d || fn.relativePath.startsWith(d))) {
+                    dirCovered.push(fn.relativePath);
                 }
+            }
+
+            if (dirsToUntrack.length === 0 && filesToRemove.length === 0) {
+                vscode.window.showInformationMessage(
+                    dirCovered.length > 0
+                        ? `XLens: ${dirCovered.length} file(s) are covered by a tracked directory — right-click the directory to untrack.`
+                        : 'XLens: Nothing removable selected.',
+                );
                 return;
             }
 
             try {
-                if (explicitRemovable.length > 0) {
-                    removeFilesFromPreset(repoRoot, activeName, explicitRemovable);
-                    await doRefresh();
+                const removedFiles = [...new Set(filesToRemove)];
+                const removedDirs = [...new Set(dirsToUntrack)];
+                if (removedFiles.length > 0) {
+                    removeFilesFromPreset(repoRoot, activeName, removedFiles);
                 }
-                let msg = `XLens: Removed ${explicitRemovable.length} file${explicitRemovable.length !== 1 ? 's' : ''} from preset "${activeName}".`;
-                if (onlyByDir.length > 0) {
-                    msg += ` ${onlyByDir.length} other file${onlyByDir.length !== 1 ? 's are' : ' is'} covered by a tracked directory and stays (untrack the directory to remove).`;
+                if (removedDirs.length > 0) {
+                    removeDirsFromPreset(repoRoot, activeName, removedDirs);
+                }
+                await doRefresh();
+                const parts: string[] = [];
+                if (removedFiles.length > 0) { parts.push(`${removedFiles.length} file(s)`); }
+                if (removedDirs.length > 0) { parts.push(`${removedDirs.length} dir(s)`); }
+                let msg = `XLens: Removed ${parts.join(' and ')} from preset "${activeName}".`;
+                if (dirCovered.length > 0) {
+                    msg += ` ${dirCovered.length} file(s) covered by a tracked directory stayed.`;
                 }
                 vscode.window.showInformationMessage(msg);
             } catch (err) {

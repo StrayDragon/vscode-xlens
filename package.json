@@ -70,11 +70,6 @@
         "icon": "$(add)"
       },
       {
-        "command": "xlens.preset.trackFolder",
-        "title": "Track in XLens Preset",
-        "icon": "$(folder)"
-      },
-      {
         "command": "xlens.preset.removeFiles",
         "title": "Remove from Preset",
         "icon": "$(remove)"
@@ -145,11 +140,6 @@
       "explorer/context": [
         {
           "command": "xlens.preset.addFilesFromExplorer",
-          "when": "resourceScheme == file",
-          "group": "2_workspace"
-        },
-        {
-          "command": "xlens.preset.trackFolder",
           "when": "resourceScheme == file",
           "group": "2_workspace"
         }
