@@ -291,8 +291,8 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       folderOpen: '<svg viewBox="0 0 16 16"><path d="M2 5h5l1 1h6v1H2V5zm0 2h12v5H2V7z"/></svg>',
     };
 
-    /** @type {Map<string, 'checked'|'unchecked'|'partial'>} */
-    const state = new Map();
+    /** @type {Set<string>} Nodes whose own checkbox is selected. */
+    const checked = new Set();
     /** @type {Set<string>} */
     const expanded = new Set();
     /** @type {Map<string, object>} */
@@ -305,66 +305,52 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     function indexTree(nodes) {
       for (const n of nodes) {
         nodeByPath.set(n.path, n);
-        state.set(n.path, 'unchecked');
         if (n.children) indexTree(n.children);
       }
     }
 
-    function collectFilePaths(node, out) {
-      if (node.kind === 'file') { out.push(node.path); return; }
-      for (const c of node.children || []) collectFilePaths(c, out);
-    }
-
-    function setSubtree(node, value) {
-      state.set(node.path, value);
-      for (const c of node.children || []) setSubtree(c, value);
-    }
-
-    function refreshFolder(node) {
-      if (node.kind !== 'folder' || !node.children?.length) return;
-      let checked = 0, partial = 0;
-      for (const c of node.children) {
-        const s = state.get(c.path);
-        if (s === 'checked') checked++;
-        else if (s === 'partial') partial++;
+    // Display state derived from the checked set:
+    // - 'checked'  = the node itself is selected
+    // - 'partial'  = an unselected folder has selected descendants
+    // - 'unchecked'= neither the node nor its descendants are selected
+    function getDisplayState(node) {
+      if (node.kind === 'file') {
+        return checked.has(node.path) ? 'checked' : 'unchecked';
       }
-      const total = node.children.length;
-      if (checked === total && partial === 0) state.set(node.path, 'checked');
-      else if (checked === 0 && partial === 0) state.set(node.path, 'unchecked');
-      else state.set(node.path, 'partial');
+      if (checked.has(node.path)) return 'checked';
+      return hasCheckedDescendant(node) ? 'partial' : 'unchecked';
     }
 
-    function updateAncestors(path) {
-      const parts = path.split('/');
-      for (let i = parts.length - 1; i >= 0; i--) {
-        const p = parts.slice(0, i + 1).join('/');
-        const node = nodeByPath.get(p);
-        if (node?.kind === 'folder') refreshFolder(node);
+    function hasCheckedDescendant(node) {
+      for (const c of node.children || []) {
+        if (checked.has(c.path)) return true;
+        if (c.kind === 'folder' && hasCheckedDescendant(c)) return true;
       }
+      return false;
     }
 
     function toggleCheck(node) {
-      const next = state.get(node.path) === 'checked' ? 'unchecked' : 'checked';
-      setSubtree(node, next);
-      updateAncestors(node.path);
+      if (checked.has(node.path)) {
+        checked.delete(node.path);
+      } else {
+        checked.add(node.path);
+        // Selecting a folder tracks the directory itself; it does NOT auto-select children.
+      }
       scheduleRender();
       updateSummary();
     }
 
     function selectedFiles() {
-      // Minimal selection: fully-checked folders become tracked *directories*
-      // (not expanded to files), so file renames/deletes inside them are handled
-      // by re-expansion at view time. Partially-checked folders recurse.
+      // A checked folder is tracked as a directory and its descendants are ignored.
       const files = [];
       const dirs = [];
       function walk(node) {
-        const s = state.get(node.path);
         if (node.kind === 'folder') {
-          if (s === 'checked') { dirs.push(node.path); return; }   // track the dir itself
+          if (checked.has(node.path)) { dirs.push(node.path); return; }
           for (const c of node.children || []) walk(c);
           return;
         }
-        if (s === 'checked') files.push(node.path);              // file
+        if (checked.has(node.path)) files.push(node.path);
       }
       for (const n of TREE) walk(n);
       return { files: [...new Set(files)].sort(), dirs: [...new Set(dirs)].sort() };
@@ -395,7 +381,7 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     function createRow(node, depth) {
       const isFolder = node.kind === 'folder';
       const isOpen = isFolder && expanded.has(node.path);
-      const s = state.get(node.path);
+      const s = getDisplayState(node);
 
       const row = document.createElement('div');
       row.className = 'node-row';
@@ -528,23 +514,17 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       }, 180);
     });
 
-    function refreshAllFolders(nodes) {
-      for (const n of nodes) {
-        if (n.kind === 'folder') { refreshFolder(n); refreshAllFolders(n.children || []); }
-      }
-    }
-
     document.getElementById('select-all').onclick = () => {
-      // No filter: check top-level nodes directly so folders become tracked dirs.
+      // No filter: select top-level nodes as-is (folders become tracked dirs).
+      // With filter: select each visible match individually.
       const targets = filterText ? flattenMatches(filterText) : TREE;
-      for (const node of targets) setSubtree(node, 'checked');
-      refreshAllFolders(TREE);
+      for (const node of targets) checked.add(node.path);
       scheduleRender();
       updateSummary();
     };
 
     document.getElementById('clear-all').onclick = () => {
-      for (const [path] of state) state.set(path, 'unchecked');
+      checked.clear();
       scheduleRender();
       updateSummary();
     };
