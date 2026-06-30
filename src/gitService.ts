@@ -132,3 +132,41 @@ export async function listRepoFiles(repoRoot: string, filterPrefix: string): Pro
 
     return [...files].sort();
 }
+
+/**
+ * Quote a single git pathspec argument, escaping embedded double quotes.
+ */
+function quotePathspec(p: string): string {
+    return '"' + p.replace(/"/g, '\\"') + '"';
+}
+
+/**
+ * Expand tracked-directory entries to their current tracked file set.
+ * Returns repo-relative paths. Files are resolved fresh on every call, so file
+ * renames/deletes within a tracked directory are picked up automatically
+ * (directories are stable, files are not).
+ */
+export async function expandDirsToTrackedFiles(repoRoot: string, dirs: string[]): Promise<string[]> {
+    const norm = dirs
+        .map(d => d.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, ''))
+        .filter(Boolean);
+    if (norm.length === 0) { return []; }
+
+    // Ensure trailing slash so git treats each as a directory prefix.
+    const pathspecs = norm.map(d => quotePathspec(d.endsWith('/') ? d : d + '/')).join(' ');
+    const cmd = `git -c core.quotePath=false ls-files -- ${pathspecs}`;
+
+    let output: string;
+    try {
+        output = await execAsync(cmd, repoRoot);
+    } catch {
+        return [];
+    }
+
+    const files = new Set<string>();
+    for (const line of output.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed) { files.add(trimmed); }
+    }
+    return [...files];
+}

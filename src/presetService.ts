@@ -68,6 +68,7 @@ export function listPresets(repoRoot: string): PresetMeta[] {
                 name: preset.name,
                 description: preset.description ?? '',
                 fileCount: preset.files.length,
+                dirCount: (preset.dirs ?? []).length,
                 baseBranch: preset.baseBranch,
                 createdAt: preset.createdAt ?? new Date().toISOString(),
                 updatedAt: preset.updatedAt ?? new Date().toISOString(),
@@ -119,6 +120,7 @@ export function createPreset(
     files: string[],
     description?: string,
     baseBranch?: string,
+    dirs?: string[],
 ): Preset {
     const sanitized = sanitizePresetName(name);
     const now = new Date().toISOString();
@@ -126,6 +128,7 @@ export function createPreset(
         name: sanitized,
         description: description ?? '',
         files: [...new Set(files)].sort(), // dedup + sort
+        dirs: [...new Set(dirs ?? [])].sort(),
         baseBranch,
         fileCount: 0,
         createdAt: now,
@@ -194,6 +197,48 @@ export function addFilesToPreset(repoRoot: string, presetName: string, files: st
     }
     preset.files = [...existing].sort();
     preset.fileCount = preset.files.length;
+    savePreset(repoRoot, preset);
+    return preset;
+}
+
+/** Normalize a tracked directory path: repo-relative, no leading './', no trailing '/'. */
+export function normalizeDir(dir: string): string {
+    let d = dir.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (d === '.' || d === '') { return ''; }
+    return d;
+}
+
+/** Add tracked directories to an existing preset (dedup). */
+export function addDirsToPreset(repoRoot: string, presetName: string, dirs: string[]): Preset {
+    const preset = loadPreset(repoRoot, presetName);
+    const existing = new Set(preset.dirs ?? []);
+    let added = 0;
+    for (const raw of dirs) {
+        const d = normalizeDir(raw);
+        if (!d) { continue; } // root directory would track the whole repo; skip
+        if (!existing.has(d)) {
+            existing.add(d);
+            added++;
+        }
+    }
+    if (added === 0) {
+        return preset;
+    }
+    preset.dirs = [...existing].sort();
+    savePreset(repoRoot, preset);
+    return preset;
+}
+
+/** Remove tracked directories from an existing preset. */
+export function removeDirsFromPreset(repoRoot: string, presetName: string, dirs: string[]): Preset {
+    const preset = loadPreset(repoRoot, presetName);
+    const removeSet = new Set(dirs.map(normalizeDir));
+    const before = preset.dirs ?? [];
+    const after = before.filter(d => !removeSet.has(d));
+    if (after.length === before.length) {
+        return preset; // no changes
+    }
+    preset.dirs = after;
     savePreset(repoRoot, preset);
     return preset;
 }

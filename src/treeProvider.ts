@@ -34,6 +34,10 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
     private activePresetName: string | undefined;
     private presetFiles: string[] = [];
     private currentEntries: DiffEntry[] = [];
+    // Fully resolved preset file set (explicit files + directories expanded via git).
+    // Set from doRefresh before refresh(). When unset (e.g. right after switchToPreset),
+    // buildPresetTree falls back to the raw `preset.files` on disk as a best-effort view.
+    private presetResolvedFiles: string[] | undefined;
 
     constructor(private repoRoot: string) {}
 
@@ -70,6 +74,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
 
     setViewMode(mode: ViewMode, presetName?: string): void {
         this.viewMode = mode;
+        // Invalidate resolved files; doRefresh will recompute (possibly expanding dirs).
+        this.presetResolvedFiles = undefined;
         if (mode === 'live') {
             this.activePresetName = undefined;
             this.presetFiles = [];
@@ -78,6 +84,12 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         }
         // Rebuild with cached entries
         this.rebuildTree();
+    }
+
+    /** Store the directory-resolved file set and refresh the tree. Does not fire a
+     *  rebuild by itself — pair with refresh(). */
+    setPresetResolvedFiles(files: string[]): void {
+        this.presetResolvedFiles = files;
     }
 
     // ── Refresh ──────────────────────────────────────────────
@@ -94,6 +106,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         this.activePath = undefined;
         this.currentEntries = [];
         this.presetFiles = [];
+        this.presetResolvedFiles = undefined;
         this._onDidChangeTreeData.fire();
     }
 
@@ -160,15 +173,22 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
 
         // Load preset
         let presetFiles: string[];
-        try {
-            const preset = loadPreset(this.repoRoot, this.activePresetName);
-            presetFiles = preset.files;
-            this.presetFiles = presetFiles;
-        } catch {
-            this.presetFiles = [];
-            this.rootNode = null;
-            return;
+        if (this.presetResolvedFiles) {
+            // Directories already expanded by doRefresh → use the resolved set.
+            presetFiles = this.presetResolvedFiles;
+        } else {
+            // Best-effort initial view: read explicit files from disk (dirs not yet
+            // expanded). doRefresh() will recompute shortly.
+            try {
+                const preset = loadPreset(this.repoRoot, this.activePresetName);
+                presetFiles = preset.files;
+            } catch {
+                this.presetFiles = [];
+                this.rootNode = null;
+                return;
+            }
         }
+        this.presetFiles = presetFiles;
 
         if (presetFiles.length === 0) {
             this.rootNode = this.makeEmptyPresetRoot();
@@ -328,10 +348,12 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         const inPresetMode = this.viewMode === 'preset';
 
         if (inPresetMode && element.isClean) {
-            // Clean/unchanged
-            item.description = '$(circle-outline) clean';
+            // Clean/unchanged. Note: TreeItem.description does NOT render $(...) codicons,
+            // they would appear literally — so use plain text here. A circular badge is
+            // conveyed via the decorationProvider (or the "clean" label).
+            item.description = 'clean';
             item.tooltip = 'Not changed from base branch (tracked by preset)';
-            item.iconPath = new vscode.ThemeIcon('circle-outline');
+            // Keep the file-type icon by NOT overriding iconPath — VS Code resolves it from resourceUri.
         } else if (this.displayMode === 'description') {
             item.description = STATUS_LABELS[element.status];
         }

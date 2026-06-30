@@ -37,11 +37,18 @@ export interface PresetMeta {
     name: string;
     description: string;
     fileCount: number;
+    /** Number of directories tracked by the preset (resolved at view time). */
+    dirCount?: number;
     baseBranch?: string;
     createdAt: string;
     updatedAt: string;
 }
 
 export interface Preset extends PresetMeta {
+    /** Explicitly tracked file paths (repo-relative). */
     files: string[];
+    /** Tracked directories (repo-relative, trailing-slash agnostic). At view time each
+     *  directory is expanded via `git ls-files` to its current file set, so file
+     *  renames/deletes within a tracked directory are handled automatically. */
+    dirs?: string[];
 }
