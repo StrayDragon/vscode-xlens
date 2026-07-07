@@ -69,7 +69,12 @@ git diff <base-branch> --name-status -- <workspace-prefix>
 ### Presets
 
 - **Save Current Files as Preset**：保存当前所有变更文件
-- **Create Custom Preset**：弹出临时 Webview 页面，展示完整项目文件树（可折叠、可勾选、可搜索），Confirm 后命名保存
+- **Create Custom Preset**：弹出临时 Webview 页面，展示完整项目文件树（可折叠、可勾选、可搜索）：
+  - 点击文件夹会在三种状态间循环：未勾选 → **[-] 跟踪目录** → **[x] 递归全选文件** → 未勾选；部分选中时点击会直接全选
+  - 目录路径会在每次刷新时重新解析，自动适应新增、删除、重命名
+  - 整行点击即可勾选，操作更方便
+  - 文件按扩展名显示 VS Code 风格颜色图标（TypeScript、JavaScript、图片、PDF 等常见类型）
+  - Confirm 后命名保存
 
 ## 文件状态标记
 

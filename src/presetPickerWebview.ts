@@ -6,6 +6,12 @@ export interface FileTreeNode {
     path: string;
     children?: FileTreeNode[];
     fileCount?: number;
+    directFileCount?: number;
+}
+
+export interface PresetSelection {
+    files: string[];
+    dirs: string[];
 }
 
 export function buildFileTree(filePaths: string[]): FileTreeNode[] {
@@ -15,6 +21,7 @@ export function buildFileTree(filePaths: string[]): FileTreeNode[] {
         path: string;
         children: Map<string, Mutable>;
         fileCount: number;
+        directFileCount: number;
     }
 
     const root: Mutable = {
@@ -23,6 +30,7 @@ export function buildFileTree(filePaths: string[]): FileTreeNode[] {
         path: '',
         children: new Map(),
         fileCount: 0,
+        directFileCount: 0,
     };
 
     for (const filePath of filePaths) {
@@ -40,6 +48,7 @@ export function buildFileTree(filePaths: string[]): FileTreeNode[] {
                     path: filePath,
                     children: new Map(),
                     fileCount: 0,
+                    directFileCount: 0,
                 });
             } else {
                 const folderPath = parts.slice(0, i + 1).join('/');
@@ -51,6 +60,7 @@ export function buildFileTree(filePaths: string[]): FileTreeNode[] {
                         path: folderPath,
                         children: new Map(),
                         fileCount: 0,
+                        directFileCount: 0,
                     };
                     current.children.set(part, folder);
                 }
@@ -60,12 +70,19 @@ export function buildFileTree(filePaths: string[]): FileTreeNode[] {
     }
 
     function computeCounts(node: Mutable): number {
-        let count = 0;
+        let directCount = 0;
+        let totalCount = 0;
         for (const child of node.children.values()) {
-            count += child.kind === 'file' ? 1 : computeCounts(child);
+            if (child.kind === 'file') {
+                directCount++;
+                totalCount++;
+            } else {
+                totalCount += computeCounts(child);
+            }
         }
-        node.fileCount = count;
-        return count;
+        node.fileCount = totalCount;
+        node.directFileCount = directCount;
+        return totalCount;
     }
 
     function toPublic(node: Mutable): FileTreeNode {
@@ -85,6 +102,7 @@ export function buildFileTree(filePaths: string[]): FileTreeNode[] {
             name: node.name,
             path: node.path,
             fileCount: node.fileCount,
+            directFileCount: node.directFileCount,
             children,
         };
     }
@@ -136,6 +154,12 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
       margin-bottom: 6px;
     }
+    .toolbar-hint {
+      font-size: 11px;
+      opacity: 0.75;
+      margin-bottom: 6px;
+      line-height: 1.35;
+    }
     #filter {
       width: 100%;
       height: 26px;
@@ -155,12 +179,17 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     .node-row {
       display: flex;
       align-items: center;
-      height: 22px;
-      line-height: 22px;
-      padding-right: 8px;
+      height: 24px;
+      line-height: 24px;
+      padding-right: 10px;
       position: relative;
+      cursor: pointer;
+      border-radius: 3px;
+      margin: 0 4px;
     }
     .node-row:hover { background: var(--vscode-list-hoverBackground); }
+    .node-row.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+    .node-row.selected .meta { opacity: 0.7; }
     .node-row .indent-guides {
       position: absolute;
       top: 0;
@@ -268,6 +297,10 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
 <body>
   <div class="toolbar">
     <div class="toolbar-title">Pick files to watch</div>
+    <div class="toolbar-hint">
+      Click a folder twice to cycle: unchecked → track directory ([-]) → select all files recursively ([x]).
+      Directory paths are re-resolved on every refresh.
+    </div>
     <input id="filter" type="search" placeholder="Filter files..." spellcheck="false" />
   </div>
   <div id="tree"></div>
@@ -284,15 +317,62 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     const FILTER_LIMIT = 800;
 
     const ICONS = {
-      chevronRight: '<svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4z"/></svg>',
-      chevronDown: '<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4z"/></svg>',
-      file: '<svg viewBox="0 0 16 16"><path d="M4 2h6l3 3v9H4V2zm6 0v3h3"/></svg>',
-      folder: '<svg viewBox="0 0 16 16"><path d="M2 4h5l1 1h6v7H2V4z"/></svg>',
-      folderOpen: '<svg viewBox="0 0 16 16"><path d="M2 5h5l1 1h6v1H2V5zm0 2h12v5H2V7z"/></svg>',
+      chevronRight: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M6 4l4 4-4 4z"/></svg>',
+      chevronDown: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M4 6l4 4 4-4z"/></svg>',
+      folder: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1.5 3.5h5l1.5 1.5h6.5v8.5h-13v-10z"/></svg>',
+      folderOpen: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1.5 3.5h5l1.5 1.5h6.5v2h-13v-3.5z M1.5 8.5h13v5h-13v-5z"/></svg>',
     };
 
-    /** @type {Set<string>} Nodes whose own checkbox is selected. */
-    const checked = new Set();
+    const FILE_COLORS = {
+      ts: '#3178c6', tsx: '#3178c6',
+      js: '#d4b000', jsx: '#d4b000', mjs: '#d4b000', esm: '#d4b000',
+      json: '#c9a000',
+      md: '#2980b9', mdx: '#2980b9',
+      css: '#2965f1', scss: '#c6538c', sass: '#c6538c', less: '#1d365d', styl: '#b3d107',
+      html: '#e34c26', htm: '#e34c26',
+      py: '#3572a5',
+      go: '#00add8',
+      rs: '#dea584',
+      java: '#b07219',
+      cpp: '#f34b7d', c: '#555555', h: '#a8b9cc', hpp: '#f34b7d',
+      cs: '#178600',
+      rb: '#701516',
+      php: '#4f5d95',
+      swift: '#ffac45',
+      kt: '#a97bff',
+      dart: '#00b4ab',
+      vue: '#41b883',
+      yaml: '#cb171e', yml: '#cb171e',
+      toml: '#9c4121',
+      xml: '#0060ac',
+      sql: '#f29111',
+      sh: '#89e051', bash: '#89e051', zsh: '#89e051', fish: '#89e051',
+      png: '#26a69a', jpg: '#26a69a', jpeg: '#26a69a', gif: '#26a69a', svg: '#26a69a', webp: '#26a69a', ico: '#26a69a', bmp: '#26a69a',
+      mp4: '#26a69a', mov: '#26a69a', avi: '#26a69a', mkv: '#26a69a', webm: '#26a69a',
+      mp3: '#26a69a', wav: '#26a69a', ogg: '#26a69a', flac: '#26a69a',
+      pdf: '#e53935',
+      zip: '#78909c', tar: '#78909c', gz: '#78909c', rar: '#78909c', '7z': '#78909c', bz2: '#78909c', xz: '#78909c',
+      doc: '#2b579a', docx: '#2b579a',
+      xls: '#217346', xlsx: '#217346', csv: '#217346',
+      ppt: '#d24726', pptx: '#d24726',
+      lock: '#90a4ae',
+      gitignore: '#f05032', dockerignore: '#2496ed', npmignore: '#cb3837',
+    };
+
+    function fileIconSvg(fileName) {
+      const ext = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+      const color = FILE_COLORS[ext] || '#78909c';
+      return '<svg viewBox="0 0 16 16">' +
+        '<path fill="currentColor" d="M3 1.5h5.5l4.5 4.5v9h-10v-13.5z" opacity="0.85"/>' +
+        '<path fill="' + color + '" d="M3 12h10v2.5h-10z"/>' +
+        '<path fill="currentColor" d="M8.5 1.5v4h4.5" opacity="0.5"/>' +
+        '</svg>';
+    }
+
+    /** @type {Set<string>} Explicitly selected file paths. */
+    const checkedFiles = new Set();
+    /** @type {Set<string>} Directory paths tracked as directories. */
+    const checkedDirs = new Set();
     /** @type {Set<string>} */
     const expanded = new Set();
     /** @type {Map<string, object>} */
@@ -309,62 +389,139 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       }
     }
 
-    // Display state derived from the checked set:
-    // - 'checked'  = the node itself is selected
-    // - 'partial'  = an unselected folder has selected descendants
-    // - 'unchecked'= neither the node nor its descendants are selected
-    function getDisplayState(node) {
-      if (node.kind === 'file') {
-        return checked.has(node.path) ? 'checked' : 'unchecked';
+    function getDescendantFiles(node, out) {
+      for (const c of node.children || []) {
+        if (c.kind === 'file') out.push(c.path);
+        else getDescendantFiles(c, out);
       }
-      if (checked.has(node.path)) return 'checked';
-      return hasCheckedDescendant(node) ? 'partial' : 'unchecked';
     }
 
-    function hasCheckedDescendant(node) {
+    function getDescendantDirs(node, out) {
       for (const c of node.children || []) {
-        if (checked.has(c.path)) return true;
-        if (c.kind === 'folder' && hasCheckedDescendant(c)) return true;
+        if (c.kind === 'folder') {
+          out.push(c.path);
+          getDescendantDirs(c, out);
+        }
+      }
+    }
+
+    function hasSelectedDescendant(node) {
+      for (const c of node.children || []) {
+        if (c.kind === 'file') {
+          if (checkedFiles.has(c.path)) return true;
+        } else {
+          if (checkedDirs.has(c.path)) return true;
+          if (hasSelectedDescendant(c)) return true;
+        }
       }
       return false;
     }
 
-    function toggleCheck(node) {
-      if (checked.has(node.path)) {
-        checked.delete(node.path);
+    function isDirFullySelected(node) {
+      const files = [];
+      getDescendantFiles(node, files);
+      if (files.length === 0) return false; // empty dirs don't count as fully selected
+      return files.every(f => checkedFiles.has(f));
+    }
+
+    function getAncestorDirPaths(filePath) {
+      const parts = filePath.split('/').filter(Boolean);
+      const ancestors = [];
+      for (let i = 1; i < parts.length; i++) {
+        ancestors.push(parts.slice(0, i).join('/'));
+      }
+      return ancestors;
+    }
+
+    function isSelected(node) {
+      if (node.kind === 'file') return checkedFiles.has(node.path);
+      if (checkedDirs.has(node.path)) return true;
+      return isDirFullySelected(node);
+    }
+
+    function getDisplayState(node) {
+      if (node.kind === 'file') {
+        return checkedFiles.has(node.path) ? 'checked' : 'unchecked';
+      }
+      if (checkedDirs.has(node.path)) return 'dir';
+      if (isDirFullySelected(node)) return 'checked';
+      if (hasSelectedDescendant(node)) return 'partial';
+      return 'unchecked';
+    }
+
+    function clearDescendants(node) {
+      const files = [];
+      getDescendantFiles(node, files);
+      for (const f of files) checkedFiles.delete(f);
+      const dirs = [];
+      getDescendantDirs(node, dirs);
+      for (const d of dirs) checkedDirs.delete(d);
+    }
+
+    function toggleFile(node) {
+      if (checkedFiles.has(node.path)) {
+        checkedFiles.delete(node.path);
       } else {
-        checked.add(node.path);
-        // Selecting a folder tracks the directory itself; it does NOT auto-select children.
+        checkedFiles.add(node.path);
+        for (const ancestor of getAncestorDirPaths(node.path)) {
+          checkedDirs.delete(ancestor);
+        }
       }
       scheduleRender();
       updateSummary();
     }
 
-    function selectedFiles() {
-      // A checked folder is tracked as a directory and its descendants are ignored.
-      const files = [];
-      const dirs = [];
-      function walk(node) {
-        if (node.kind === 'folder') {
-          if (checked.has(node.path)) { dirs.push(node.path); return; }
-          for (const c of node.children || []) walk(c);
-          return;
-        }
-        if (checked.has(node.path)) files.push(node.path);
+    function toggleDir(node) {
+      if (checkedDirs.has(node.path)) {
+        // [-] -> [x]: track dir becomes select all descendant files
+        checkedDirs.delete(node.path);
+        const dirs = [];
+        getDescendantDirs(node, dirs);
+        for (const d of dirs) checkedDirs.delete(d);
+        const files = [];
+        getDescendantFiles(node, files);
+        for (const f of files) checkedFiles.add(f);
+      } else if (isDirFullySelected(node)) {
+        // [x] -> unchecked
+        const files = [];
+        getDescendantFiles(node, files);
+        for (const f of files) checkedFiles.delete(f);
+      } else if (hasSelectedDescendant(node)) {
+        // partial -> [x]: select all remaining descendant files
+        const dirs = [];
+        getDescendantDirs(node, dirs);
+        for (const d of dirs) checkedDirs.delete(d);
+        const files = [];
+        getDescendantFiles(node, files);
+        for (const f of files) checkedFiles.add(f);
+      } else {
+        // unchecked -> [-]: track dir
+        checkedDirs.add(node.path);
       }
-      for (const n of TREE) walk(n);
-      return { files: [...new Set(files)].sort(), dirs: [...new Set(dirs)].sort() };
+      scheduleRender();
+      updateSummary();
+    }
+
+    function toggleCheck(node) {
+      if (node.kind === 'file') toggleFile(node);
+      else toggleDir(node);
+    }
+
+    function selectedItems() {
+      return {
+        files: [...checkedFiles].sort(),
+        dirs: [...checkedDirs].sort(),
+      };
     }
 
     function updateSummary() {
-      const sel = selectedFiles();
+      const sel = selectedItems();
       const parts = [];
       if (sel.files.length) parts.push(sel.files.length + ' file' + (sel.files.length !== 1 ? 's' : ''));
       if (sel.dirs.length) parts.push(sel.dirs.length + ' dir' + (sel.dirs.length !== 1 ? 's' : ''));
-      const count = sel.files.length + sel.dirs.length;
       const summary = parts.length ? parts.join(' · ') : '0 selected';
       document.getElementById('summary').textContent = summary;
-      document.getElementById('confirm').disabled = count === 0;
+      document.getElementById('confirm').disabled = sel.files.length === 0 && sel.dirs.length === 0;
     }
 
     function indentGuides(depth) {
@@ -382,9 +539,10 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       const isFolder = node.kind === 'folder';
       const isOpen = isFolder && expanded.has(node.path);
       const s = getDisplayState(node);
+      const selected = isSelected(node);
 
       const row = document.createElement('div');
-      row.className = 'node-row';
+      row.className = 'node-row' + (selected ? ' selected' : '');
       row.style.paddingLeft = (depth * 8 + 4) + 'px';
       if (depth > 0) row.appendChild(indentGuides(depth));
 
@@ -404,7 +562,7 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = s === 'checked';
-      cb.indeterminate = s === 'partial';
+      cb.indeterminate = s === 'dir' || s === 'partial';
       cb.onclick = (e) => { e.stopPropagation(); toggleCheck(node); };
       cbWrap.appendChild(cb);
 
@@ -413,18 +571,18 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       if (isFolder) {
         icon.innerHTML = isOpen ? ICONS.folderOpen : ICONS.folder;
       } else {
-        icon.innerHTML = ICONS.file;
+        icon.innerHTML = fileIconSvg(node.name);
       }
 
       const label = document.createElement('span');
       label.className = 'label';
       label.textContent = node.name;
-      label.onclick = () => {
-        if (isFolder && node.children?.length) twistie.click();
-        else toggleCheck(node);
-      };
 
       row.append(twistie, cbWrap, icon, label);
+      row.onclick = (e) => {
+        if (e.target.closest('.twistie') || e.target.closest('.checkbox-wrap')) return;
+        toggleCheck(node);
+      };
 
       if (isFolder) {
         const meta = document.createElement('span');
@@ -515,34 +673,38 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     });
 
     document.getElementById('select-all').onclick = () => {
-      // No filter: select top-level nodes as-is (folders become tracked dirs).
-      // With filter: select each visible match individually.
       const targets = filterText ? flattenMatches(filterText) : TREE;
-      for (const node of targets) checked.add(node.path);
+      for (const node of targets) {
+        if (node.kind === 'file') {
+          checkedFiles.add(node.path);
+          for (const ancestor of getAncestorDirPaths(node.path)) {
+            checkedDirs.delete(ancestor);
+          }
+        } else {
+          checkedDirs.add(node.path);
+          clearDescendants(node);
+        }
+      }
       scheduleRender();
       updateSummary();
     };
 
     document.getElementById('clear-all').onclick = () => {
-      checked.clear();
+      checkedFiles.clear();
+      checkedDirs.clear();
       scheduleRender();
       updateSummary();
     };
 
     document.getElementById('cancel').onclick = () => vscode.postMessage({ type: 'cancel' });
     document.getElementById('confirm').onclick = () => {
-      const sel = selectedFiles();
+      const sel = selectedItems();
       if (sel.files.length === 0 && sel.dirs.length === 0) return;
       vscode.postMessage({ type: 'confirm', files: sel.files, dirs: sel.dirs });
     };
   </script>
 </body>
 </html>`;
-}
-
-export interface PresetSelection {
-    files: string[];
-    dirs: string[];
 }
 
 export async function openPresetPickerWebview(filePaths: string[]): Promise<PresetSelection | undefined> {

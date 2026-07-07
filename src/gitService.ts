@@ -140,33 +140,51 @@ function quotePathspec(p: string): string {
     return '"' + p.replace(/"/g, '\\"') + '"';
 }
 
+function normalizeDirPath(d: string): string {
+    return d.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+async function listFilesUnderDir(repoRoot: string, dir: string): Promise<string[]> {
+    const prefix = dir.endsWith('/') ? dir : dir + '/';
+    const pathspec = quotePathspec(prefix);
+
+    const files = new Set<string>();
+
+    const trackedCmd = `git -c core.quotePath=false ls-files -- ${pathspec}`;
+    const untrackedCmd = `git -c core.quotePath=false ls-files --others --exclude-standard -- ${pathspec}`;
+
+    for (const cmd of [trackedCmd, untrackedCmd]) {
+        let output: string;
+        try {
+            output = await execAsync(cmd, repoRoot);
+        } catch {
+            continue;
+        }
+        for (const line of output.split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed) { files.add(trimmed); }
+        }
+    }
+
+    return [...files];
+}
+
 /**
- * Expand tracked-directory entries to their current tracked file set.
+ * Expand tracked-directory entries to their current file set.
  * Returns repo-relative paths. Files are resolved fresh on every call, so file
- * renames/deletes within a tracked directory are picked up automatically
+ * renames/deletes/new files within a tracked directory are picked up automatically
  * (directories are stable, files are not).
  */
 export async function expandDirsToTrackedFiles(repoRoot: string, dirs: string[]): Promise<string[]> {
-    const norm = dirs
-        .map(d => d.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, ''))
-        .filter(Boolean);
+    const norm = dirs.map(normalizeDirPath).filter(Boolean);
     if (norm.length === 0) { return []; }
 
-    // Ensure trailing slash so git treats each as a directory prefix.
-    const pathspecs = norm.map(d => quotePathspec(d.endsWith('/') ? d : d + '/')).join(' ');
-    const cmd = `git -c core.quotePath=false ls-files -- ${pathspecs}`;
-
-    let output: string;
-    try {
-        output = await execAsync(cmd, repoRoot);
-    } catch {
-        return [];
-    }
-
     const files = new Set<string>();
-    for (const line of output.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed) { files.add(trimmed); }
+
+    for (const dir of norm) {
+        const candidates = await listFilesUnderDir(repoRoot, dir);
+        for (const f of candidates) { files.add(f); }
     }
+
     return [...files];
 }

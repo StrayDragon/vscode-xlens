@@ -6,4 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
-- Initial release
+- Preset picker: folder checkbox cycles through unchecked → track directory ([-]) → select all files recursively ([x]) → unchecked; partial selection clicks to select-all
+- Preset picker: click any row to select/unselect; selected rows are highlighted
+- Preset picker: files show VS Code-style extension-based colored icons (TypeScript, JavaScript, images, PDF, etc.)
+- Preset directories are re-resolved on every refresh and now include untracked files, so renames/deletes/new files under tracked dirs are picked up automatically
+- Preset JSON no longer persists `fileCount` (it is derived from `files.length` at load time)

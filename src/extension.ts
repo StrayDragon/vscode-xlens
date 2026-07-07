@@ -143,8 +143,8 @@ async function showPresetsQuickPick(): Promise<void> {
         const isActive = isPresetMode && p.name === activeName;
         items.push({
             label: `$(${isActive ? 'pin' : 'circle-outline'}) ${p.name}`,
-            description: p.description ? p.description.substring(0, 60) : `${p.fileCount} files`,
-            detail: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} dir${p.dirCount !== 1 ? 's' : ''}` : ''} · ${p.baseBranch ? `base: ${p.baseBranch}` : 'default base'}`,
+            description: p.description ? p.description.substring(0, 60) : `${p.fileCount} files${p.dirCount ? ` · ${p.dirCount} dir${p.dirCount !== 1 ? 's' : ''}` : ''}`,
+            detail: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} tracked dir${p.dirCount !== 1 ? 's' : ''}` : ''} · ${p.baseBranch ? `base: ${p.baseBranch}` : 'default base'}`,
             presetName: p.name,
         });
     }
@@ -281,7 +281,7 @@ async function savePresetWithFiles(files: string[], namePrompt: string, dirs?: s
         const dirCount = (preset.dirs ?? []).length;
         if (dirCount > 0) {
             vscode.window.showInformationMessage(
-                `XLens: Preset "${name}" saved — ${fileCount} file(s) · ${dirCount} dir(s) (expanded at view time).`,
+                `XLens: Preset "${name}" saved — ${fileCount} file(s) · ${dirCount} tracked dir${dirCount !== 1 ? 's' : ''}.`,
             );
         } else {
             vscode.window.showInformationMessage(

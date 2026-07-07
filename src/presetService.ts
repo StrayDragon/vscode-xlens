@@ -92,6 +92,7 @@ export function loadPreset(repoRoot: string, name: string): Preset {
         throw new Error(`Invalid preset file: ${name}`);
     }
 
+    preset.fileCount = preset.files.length;
     return preset;
 }
 
@@ -103,7 +104,9 @@ export function savePreset(repoRoot: string, preset: Preset): void {
 
     preset.updatedAt = new Date().toISOString();
     const filePath = getPresetPath(repoRoot, preset.name);
-    fs.writeFileSync(filePath, JSON.stringify(preset, null, 2), 'utf-8');
+    // fileCount is derived from files.length and does not need to be persisted.
+    const { fileCount: _, ...toSave } = preset;
+    fs.writeFileSync(filePath, JSON.stringify(toSave, null, 2), 'utf-8');
 }
 
 /**
@@ -123,7 +126,7 @@ export function createPreset(
         name: sanitized,
         description: description ?? '',
         files: [...new Set(files)].sort(), // dedup + sort
-        dirs: [...new Set(dirs ?? [])].sort(),
+        dirs: [...new Set((dirs ?? []).map(normalizeDir))].sort(),
         baseBranch,
         fileCount: 0,
         createdAt: now,
