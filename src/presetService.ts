@@ -3,19 +3,14 @@ import * as fs from 'fs';
 import { Preset, PresetMeta } from './types';
 
 const PRESET_DIR = '.xlens/preset';
-const GITKEEP = '.xlens/.gitkeep';
 
 /**
- * Ensure the .xlens/preset/ directory and .gitkeep file exist.
+ * Ensure the .xlens/preset/ directory exists.
+ * Created lazily — only called when actually saving a preset.
  */
 export function ensurePresetDir(repoRoot: string): void {
     const dir = path.join(repoRoot, PRESET_DIR);
     fs.mkdirSync(dir, { recursive: true });
-
-    const gitkeep = path.join(repoRoot, GITKEEP);
-    if (!fs.existsSync(gitkeep)) {
-        fs.writeFileSync(gitkeep, '', 'utf-8');
-    }
 }
 
 /**

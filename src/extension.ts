@@ -7,7 +7,6 @@ import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, exec
 import { GitStatusDecorationProvider } from './decorationProvider';
 import { TreeNode } from './types';
 import {
-    ensurePresetDir,
     listPresets,
     loadPreset,
     createPreset,
@@ -736,13 +735,6 @@ export async function activate(context: vscode.ExtensionContext) {
     } catch {
         vscode.window.showWarningMessage('XLens: Not a git repository.');
         return;
-    }
-
-    // Ensure preset directory exists
-    try {
-        ensurePresetDir(repoRoot);
-    } catch {
-        // Not critical
     }
 
     provider = new GitDiffTreeProvider(repoRoot);
