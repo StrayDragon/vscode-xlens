@@ -17,13 +17,15 @@ export function ensurePresetDir(repoRoot: string): void {
  * Sanitize a preset name for filesystem safety.
  */
 export function sanitizePresetName(name: string): string {
-    return name
-        .replace(/[\\/]/g, '-')
-        .replace(/\.\./g, '-')
-        .replace(/[^a-zA-Z0-9._\-]/g, '_')
-        .replace(/^\.+/, '')
-        .trim()
-        || 'untitled';
+    const sanitized = name
+        .replace(/[\\/]/g, '-')      // path separators
+        .replace(/\.\./g, '-')       // parent-directory reference
+        .replace(/[<>:"|?*]/g, '_')  // reserved Windows filename characters
+        .replace(/[\x00-\x1f\x7f]/g, '') // control characters
+        .replace(/^\.+/, '')         // leading dots
+        .replace(/\.+$/, '')         // trailing dots
+        .trim();
+    return sanitized || 'untitled';
 }
 
 /**

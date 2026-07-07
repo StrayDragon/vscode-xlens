@@ -11,3 +11,4 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Preset picker: files show VS Code-style extension-based colored icons (TypeScript, JavaScript, images, PDF, etc.)
 - Preset directories are re-resolved on every refresh and now include untracked files, so renames/deletes/new files under tracked dirs are picked up automatically
 - Preset JSON no longer persists `fileCount` (it is derived from `files.length` at load time)
+- Preset names now support Chinese and other Unicode characters
