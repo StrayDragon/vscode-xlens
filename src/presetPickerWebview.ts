@@ -160,6 +160,33 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       margin-bottom: 6px;
       line-height: 1.35;
     }
+    .toolbar-actions {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .toolbar-actions button {
+      height: 22px;
+      padding: 0 8px;
+      border: none;
+      border-radius: 2px;
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .toolbar-actions button:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    .toolbar-actions button svg {
+      width: 12px;
+      height: 12px;
+      fill: currentColor;
+    }
     #filter {
       width: 100%;
       height: 26px;
@@ -300,6 +327,10 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     <div class="toolbar-hint">
       Click a folder twice to cycle: unchecked → track directory ([-]) → select all files recursively ([x]).
       Directory paths are re-resolved on every refresh.
+    </div>
+    <div class="toolbar-actions">
+      <button id="expand-all">Expand all</button>
+      <button id="collapse-all-tree">Collapse all</button>
     </div>
     <input id="filter" type="search" placeholder="Filter files..." spellcheck="false" />
   </div>
@@ -663,6 +694,24 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
     }
     render();
     updateSummary();
+
+    document.getElementById('expand-all').onclick = () => {
+      function expandAll(nodes) {
+        for (const n of nodes) {
+          if (n.kind === 'folder' && n.children?.length) {
+            expanded.add(n.path);
+            expandAll(n.children);
+          }
+        }
+      }
+      expandAll(TREE);
+      scheduleRender();
+    };
+
+    document.getElementById('collapse-all-tree').onclick = () => {
+      expanded.clear();
+      scheduleRender();
+    };
 
     document.getElementById('filter').addEventListener('input', (e) => {
       clearTimeout(filterTimer);

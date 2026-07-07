@@ -51,6 +51,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "xlens.gitDiffView.expandAll",
+        "title": "Expand All",
+        "icon": "$(expand-all)"
+      },
+      {
         "command": "xlens.showPresets",
         "title": "Presets",
         "icon": "$(list-tree)"
@@ -119,6 +124,11 @@
           "command": "xlens.gitDiffView.refresh",
           "when": "view == gitDiffExplorerView",
           "group": "navigation@2"
+        },
+        {
+          "command": "xlens.gitDiffView.expandAll",
+          "when": "view == gitDiffExplorerView",
+          "group": "navigation@3"
         },
         {
           "command": "xlens.gitDiffView.changeBaseBranch",

@@ -420,6 +420,14 @@ function updateViewTitle(): void {
 function registerAllCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('xlens.gitDiffView.refresh', () => doRefresh()),
+        vscode.commands.registerCommand('xlens.gitDiffView.expandAll', async () => {
+            if (!provider || !treeView) { return; }
+            const nodes = provider.getAllNodes();
+            for (const node of nodes) {
+                if (node.type !== 'folder') { continue; }
+                await treeView.reveal(node, { select: false, focus: false, expand: true }).then(undefined, () => {});
+            }
+        }),
         vscode.commands.registerCommand('xlens.showPresets', () => showPresetsQuickPick()),
         vscode.commands.registerCommand('xlens.preset.switchToLive', () => switchToLive()),
         vscode.commands.registerCommand('xlens.preset.addFiles', async (clicked: TreeNode, selected?: TreeNode[]) => {

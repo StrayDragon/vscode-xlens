@@ -138,6 +138,18 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
         return Array.from(node.children.values()).sort(nodeSorter);
     }
 
+    getAllNodes(): TreeNode[] {
+        const nodes: TreeNode[] = [];
+        const walk = (node?: TreeNode) => {
+            for (const child of this.getChildren(node)) {
+                nodes.push(child);
+                if (child.type === 'folder') { walk(child); }
+            }
+        };
+        walk();
+        return nodes;
+    }
+
     getParent(element: TreeNode): TreeNode | undefined {
         if (element === this.rootNode) { return undefined; }
         const parentRel = path.dirname(element.relativePath);
