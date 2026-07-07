@@ -245,6 +245,11 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
             const hasLiveStatus = liveByPath.has(fileNode.relativePath);
             fileNode.isClean = !hasLiveStatus;
             fileNode.isMissing = false;
+            // Clean preset files must not carry a git-status badge; remove any
+            // placeholder status that was added while building the tree.
+            if (fileNode.isClean) {
+                this.statusMap.delete(fileNode.relativePath);
+            }
         }
     }
 
