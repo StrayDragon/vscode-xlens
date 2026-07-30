@@ -37,6 +37,14 @@ export async function detectBaseBranch(repoRoot: string): Promise<string> {
     return 'master';
 }
 
+/** List all local branches in the repo. */
+export async function listBranches(repoRoot: string): Promise<string[]> {
+    const output = await execAsync(`git branch --format='%(refname:short)'`, repoRoot);
+    if (!output) { return []; }
+    // Filter out detached HEAD lines like "(HEAD detached at ...)"
+    return output.split('\n').map(s => s.trim()).filter(s => s && !s.startsWith('(') && !s.startsWith('* '));
+}
+
 export function getFilterPrefix(
     workspacePath: string,
     repoRoot: string,

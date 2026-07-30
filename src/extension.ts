@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { GitDiffTreeProvider } from './treeProvider';
-import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listRepoFiles, expandDirsToTrackedFiles } from './gitService';
+import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listBranches, listRepoFiles, expandDirsToTrackedFiles } from './gitService';
 import { dirPaths as extractDirPaths, filePaths as extractFilePaths } from './types';
 import { GitStatusDecorationProvider } from './decorationProvider';
 import { TreeNode } from './types';
@@ -635,7 +635,13 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
         }),
         vscode.commands.registerCommand('xlens.gitDiffView.changeBaseBranch', async () => {
             const current = getResolvedBaseBranch();
-            const picks = ['master', 'main', 'develop', 'trunk'].map(b => ({
+            if (!repoRoot) { return; }
+            const branches = await listBranches(repoRoot);
+            // Ensure current branch is in the list
+            if (!branches.includes(current)) {
+                branches.unshift(current);
+            }
+            const picks = branches.map(b => ({
                 label: b,
                 description: b === current ? '$(check) current' : '',
             }));
