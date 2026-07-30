@@ -845,7 +845,17 @@ async function doRefresh() {
             } catch { /* ignore */ }
         }
 
-        const baseBranch = getResolvedBaseBranch(presetBaseBranch ? { baseBranch: presetBaseBranch } : undefined);
+        let baseBranch = getResolvedBaseBranch(presetBaseBranch ? { baseBranch: presetBaseBranch } : undefined);
+        // Validate the branch exists; if not, fall back to auto-detection
+        if (!isValidBranchName(baseBranch)) {
+            baseBranch = 'HEAD';
+        } else {
+            try {
+                await execAsync(`git rev-parse --verify ${baseBranch}`, repoRoot);
+            } catch {
+                baseBranch = detectedBaseBranch || 'HEAD';
+            }
+        }
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) { return; }
 
