@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { Preset, PresetMeta } from './types';
+import { Preset, PresetMeta, isDirPath, filePaths, dirPaths } from './types';
 
 const PRESET_DIR = '.xlens/preset';
 
@@ -54,21 +54,23 @@ export function listPresets(repoRoot: string): PresetMeta[] {
 
         try {
             const fullPath = path.join(dir, entry.name);
-            const raw = fs.readFileSync(fullPath, 'utf-8');
-            const preset: Preset = JSON.parse(raw);
+            const raw = JSON.parse(fs.readFileSync(fullPath, 'utf-8')) as Record<string, unknown>;
 
-            if (!preset.name || !Array.isArray(preset.files)) {
+            // Support reading legacy presets that use `files`/`dirs`; migrate on load
+            const paths = normalizePaths(raw);
+            const name = typeof raw.name === 'string' ? raw.name : '';
+            if (!name || paths.length === 0) {
                 continue; // skip invalid
             }
 
             result.push({
-                name: preset.name,
-                description: preset.description ?? '',
-                fileCount: preset.files.length,
-                dirCount: (preset.dirs ?? []).length,
-                baseBranch: preset.baseBranch,
-                createdAt: preset.createdAt ?? new Date().toISOString(),
-                updatedAt: preset.updatedAt ?? new Date().toISOString(),
+                name,
+                description: typeof raw.description === 'string' ? raw.description : '',
+                fileCount: filePaths(paths).length,
+                dirCount: dirPaths(paths).length,
+                baseBranch: typeof raw.baseBranch === 'string' ? raw.baseBranch : undefined,
+                createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+                updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
             });
         } catch {
             // Skip malformed files
@@ -87,14 +89,26 @@ export function loadPreset(repoRoot: string, name: string): Preset {
         throw new Error(`Preset not found: ${name}`);
     }
 
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const preset: Preset = JSON.parse(raw);
+    const rawText = fs.readFileSync(filePath, 'utf-8');
+    const raw: Record<string, unknown> = JSON.parse(rawText);
+    // Migrate legacy format (files/dirs) to unified paths
+    const paths = normalizePaths(raw);
+    const preset: Preset = {
+        ...raw,
+        name: String(raw.name ?? ''),
+        paths,
+        description: String(raw.description ?? ''),
+        fileCount: filePaths(paths).length,
+        dirCount: dirPaths(paths).length,
+        baseBranch: typeof raw.baseBranch === 'string' ? raw.baseBranch : undefined,
+        createdAt: String(raw.createdAt ?? new Date().toISOString()),
+        updatedAt: String(raw.updatedAt ?? new Date().toISOString()),
+    } as Preset;
 
-    if (!preset.name || !Array.isArray(preset.files)) {
+    if (!preset.name || !Array.isArray(preset.paths)) {
         throw new Error(`Invalid preset file: ${name}`);
     }
 
-    preset.fileCount = preset.files.length;
     return preset;
 }
 
@@ -106,8 +120,8 @@ export function savePreset(repoRoot: string, preset: Preset): void {
 
     preset.updatedAt = new Date().toISOString();
     const filePath = getPresetPath(repoRoot, preset.name);
-    // fileCount is derived from files.length and does not need to be persisted.
-    const { fileCount: _, ...toSave } = preset;
+    // derived fields are not persisted
+    const { fileCount: _, dirCount: __, ...toSave } = preset;
     fs.writeFileSync(filePath, JSON.stringify(toSave, null, 2), 'utf-8');
 }
 
@@ -117,24 +131,23 @@ export function savePreset(repoRoot: string, preset: Preset): void {
 export function createPreset(
     repoRoot: string,
     name: string,
-    files: string[],
+    paths: string[],
     description?: string,
     baseBranch?: string,
-    dirs?: string[],
 ): Preset {
     const sanitized = sanitizePresetName(name);
     const now = new Date().toISOString();
+    const normalised = [...new Set(paths)].map(normalizePath).sort();
     const preset: Preset = {
         name: sanitized,
         description: description ?? '',
-        files: [...new Set(files)].sort(), // dedup + sort
-        dirs: [...new Set((dirs ?? []).map(normalizeDir))].sort(),
+        paths: normalised,
         baseBranch,
-        fileCount: 0,
+        fileCount: filePaths(normalised).length,
+        dirCount: dirPaths(normalised).length,
         createdAt: now,
         updatedAt: now,
     };
-    preset.fileCount = preset.files.length;
 
     ensurePresetDir(repoRoot);
     const filePath = getPresetPath(repoRoot, sanitized);
@@ -180,79 +193,82 @@ export function renamePreset(repoRoot: string, oldName: string, newName: string)
 }
 
 /**
- * Add files to an existing preset (dedup).
+ * Add paths to an existing preset (dedup).
+ * File paths and directory paths are normalised and merged.
  */
-export function addFilesToPreset(repoRoot: string, presetName: string, files: string[]): Preset {
+export function addPathsToPreset(repoRoot: string, presetName: string, paths: string[]): Preset {
     const preset = loadPreset(repoRoot, presetName);
-    const existing = new Set(preset.files);
+    const existing = new Set(preset.paths);
     let added = 0;
-    for (const f of files) {
-        if (!existing.has(f)) {
-            existing.add(f);
-            added++;
-        }
-    }
-    if (added === 0) {
-        return preset; // no changes
-    }
-    preset.files = [...existing].sort();
-    preset.fileCount = preset.files.length;
-    savePreset(repoRoot, preset);
-    return preset;
-}
-
-/** Normalize a tracked directory path: repo-relative, no leading './', no trailing '/'. */
-export function normalizeDir(dir: string): string {
-    let d = dir.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-    if (d === '.' || d === '') { return ''; }
-    return d;
-}
-
-/** Add tracked directories to an existing preset (dedup). */
-export function addDirsToPreset(repoRoot: string, presetName: string, dirs: string[]): Preset {
-    const preset = loadPreset(repoRoot, presetName);
-    const existing = new Set(preset.dirs ?? []);
-    let added = 0;
-    for (const raw of dirs) {
-        const d = normalizeDir(raw);
-        if (!d) { continue; } // root directory would track the whole repo; skip
-        if (!existing.has(d)) {
-            existing.add(d);
+    for (const p of paths) {
+        const n = normalizePath(p);
+        if (!n) { continue; } // root directory — skip
+        if (!existing.has(n)) {
+            existing.add(n);
             added++;
         }
     }
     if (added === 0) {
         return preset;
     }
-    preset.dirs = [...existing].sort();
-    savePreset(repoRoot, preset);
-    return preset;
-}
-
-/** Remove tracked directories from an existing preset. */
-export function removeDirsFromPreset(repoRoot: string, presetName: string, dirs: string[]): Preset {
-    const preset = loadPreset(repoRoot, presetName);
-    const removeSet = new Set(dirs.map(normalizeDir));
-    const before = preset.dirs ?? [];
-    const after = before.filter(d => !removeSet.has(d));
-    if (after.length === before.length) {
-        return preset; // no changes
-    }
-    preset.dirs = after;
+    preset.paths = [...existing].sort();
+    preset.fileCount = filePaths(preset.paths).length;
+    preset.dirCount = dirPaths(preset.paths).length;
     savePreset(repoRoot, preset);
     return preset;
 }
 
 /**
- * Remove files from an existing preset.
+ * Remove paths from an existing preset.
  */
-export function removeFilesFromPreset(repoRoot: string, presetName: string, files: string[]): Preset {
+export function removePathsFromPreset(repoRoot: string, presetName: string, paths: string[]): Preset {
     const preset = loadPreset(repoRoot, presetName);
-    const removeSet = new Set(files);
-    preset.files = preset.files.filter(f => !removeSet.has(f));
-    preset.fileCount = preset.files.length;
+    const removeSet = new Set(paths.map(normalizePath));
+    const before = preset.paths;
+    const after = before.filter(p => !removeSet.has(p));
+    if (after.length === before.length) {
+        return preset; // no changes
+    }
+    preset.paths = after;
+    preset.fileCount = filePaths(after).length;
+    preset.dirCount = dirPaths(after).length;
     savePreset(repoRoot, preset);
     return preset;
+}
+
+/**
+ * Normalize a single path entry.
+ * File: `some/project/file.ts`.
+ * Directory: `some/project/dir/` (trailing `/`).
+ * Returns empty string for root (`/` or `.`).
+ */
+export function normalizePath(raw: string): string {
+    let p = raw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (p === '.' || p === '/' || p === '') { return ''; }
+    return p;
+}
+
+/**
+ * Migrate a legacy preset object (with `files`/`dirs`) to the unified `paths` format.
+ * Accepts either the raw JSON or an already-migrated object.
+ */
+function normalizePaths(raw: Record<string, unknown>): string[] {
+    if (Array.isArray(raw.paths)) {
+        return [...new Set((raw.paths as string[]).map(normalizePath).filter(Boolean))].sort();
+    }
+    // Legacy: merge files + dirs
+    const files: string[] = Array.isArray(raw.files) ? (raw.files as string[]) : [];
+    const dirs: string[] = Array.isArray(raw.dirs) ? (raw.dirs as string[]) : [];
+    const merged = new Set<string>();
+    for (const f of files) {
+        const n = normalizePath(f);
+        if (n) { merged.add(n); }
+    }
+    for (const d of dirs) {
+        const n = normalizePath(d);
+        if (n) { merged.add(n.endsWith('/') ? n : n + '/'); }
+    }
+    return [...merged].sort();
 }
 
 /**

@@ -45,10 +45,24 @@ export interface PresetMeta {
 }
 
 export interface Preset extends PresetMeta {
-    /** Explicitly tracked file paths (repo-relative). */
-    files: string[];
-    /** Tracked directories (repo-relative, trailing-slash agnostic). At view time each
-     *  directory is expanded via `git ls-files` to its current file set, so file
-     *  renames/deletes within a tracked directory are handled automatically. */
-    dirs?: string[];
+    /** Tracked paths (repo-relative).
+     *  File paths are bare: `some/project/file.ts`.
+     *  Directory paths end with `/`: `some/project/dir/`.
+     *  Directories are resolved at view time via `git ls-files`. */
+    paths: string[];
+}
+
+/** Returns true if a preset path entry represents a directory (ends with `/`). */
+export function isDirPath(p: string): boolean {
+    return p.endsWith('/');
+}
+
+/** Extract file paths from a preset's paths array. */
+export function filePaths(paths: string[]): string[] {
+    return paths.filter(p => !isDirPath(p));
+}
+
+/** Extract directory paths from a preset's paths array. */
+export function dirPaths(paths: string[]): string[] {
+    return paths.filter(isDirPath);
 }

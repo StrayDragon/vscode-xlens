@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { DiffEntry, GitFileStatus, TreeNode, FolderNode, FileNode, StatusDisplayMode, ViewMode } from './types';
+import { DiffEntry, GitFileStatus, TreeNode, FolderNode, FileNode, StatusDisplayMode, ViewMode, filePaths } from './types';
 import { loadPreset } from './presetService';
 
 const STATUS_LABELS: Record<GitFileStatus, string> = {
@@ -36,7 +36,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
     private currentEntries: DiffEntry[] = [];
     // Fully resolved preset file set (explicit files + directories expanded via git).
     // Set from doRefresh before refresh(). When unset (e.g. right after switchToPreset),
-    // buildPresetTree falls back to the raw `preset.files` on disk as a best-effort view.
+    // buildPresetTree falls back to the raw file-paths from `preset` on disk as a best-effort view.
     private presetResolvedFiles: string[] | undefined;
 
     constructor(private repoRoot: string) {}
@@ -193,7 +193,7 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
             // expanded). doRefresh() will recompute shortly.
             try {
                 const preset = loadPreset(this.repoRoot, this.activePresetName);
-                presetFiles = preset.files;
+                presetFiles = filePaths(preset.paths);
             } catch {
                 this.presetFiles = [];
                 this.rootNode = null;

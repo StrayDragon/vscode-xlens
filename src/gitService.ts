@@ -171,9 +171,7 @@ async function listFilesUnderDir(repoRoot: string, dir: string): Promise<string[
 
 /**
  * Expand tracked-directory entries to their current file set.
- * Returns repo-relative paths. Files are resolved fresh on every call, so file
- * renames/deletes/new files within a tracked directory are picked up automatically
- * (directories are stable, files are not).
+ * @param dirs Directory paths with trailing `/` (e.g. `some/project/apis/`).
  */
 export async function expandDirsToTrackedFiles(repoRoot: string, dirs: string[]): Promise<string[]> {
     const norm = dirs.map(normalizeDirPath).filter(Boolean);

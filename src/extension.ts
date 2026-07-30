@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { GitDiffTreeProvider } from './treeProvider';
 import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listRepoFiles, expandDirsToTrackedFiles } from './gitService';
+import { dirPaths as extractDirPaths, filePaths as extractFilePaths } from './types';
 import { GitStatusDecorationProvider } from './decorationProvider';
 import { TreeNode } from './types';
 import {
@@ -12,10 +13,8 @@ import {
     createPreset,
     deletePreset,
     renamePreset,
-    addFilesToPreset,
-    removeFilesFromPreset,
-    addDirsToPreset,
-    removeDirsFromPreset,
+    addPathsToPreset,
+    removePathsFromPreset,
     updatePresetDescription,
 } from './presetService';
 import { readGitDiffViewConfig, affectsGitDiffViewConfiguration, updateGitDiffViewSetting, migrateLegacyGitDiffViewConfig } from './config';
@@ -55,22 +54,7 @@ async function setContextKey(key: string, value: boolean): Promise<void> {
     await vscode.commands.executeCommand('setContext', key, value);
 }
 
-// ── Helper: collect relative paths from tree nodes ──────────
-
-function collectFilePathsFromNodes(nodes: TreeNode[]): string[] {
-    const files = new Set<string>();
-
-    for (const node of nodes) {
-        if (node.type === 'file') {
-            files.add(node.relativePath);
-        } else if (node.type === 'folder') {
-            // Walk the tree under this folder to collect all descendant files
-            collectDescendantFiles(node, files);
-        }
-    }
-
-    return [...files];
-}
+// ── Helper: collect descendant file paths from a folder node ──
 
 function collectDescendantFiles(folder: TreeNode, out: Set<string>): void {
     if (!provider || folder.type !== 'folder') { return; }
@@ -85,14 +69,13 @@ function collectDescendantFiles(folder: TreeNode, out: Set<string>): void {
 
 // ── Helper: collect relative paths from URIs (File Explorer context menu) ──
 
-/** Split Explorer URIs into repo-relative directory paths and file paths.
- *  Directories are returned as-is (to be tracked as stable dirs), NOT expanded. */
+/** Collect repo-relative paths from Explorer URIs.
+ *  Directories get a trailing `/`, files don't. */
 async function collectPathsFromUris(
     uris: vscode.Uri[],
     repoRoot: string,
-): Promise<{ dirPaths: string[]; filePaths: string[] }> {
-    const files = new Set<string>();
-    const dirs = new Set<string>();
+): Promise<string[]> {
+    const result = new Set<string>();
 
     for (const uri of uris) {
         const absPath = uri.fsPath;
@@ -106,13 +89,13 @@ async function collectPathsFromUris(
         } catch { continue; }
 
         if (stat.isDirectory()) {
-            dirs.add(rel);
+            result.add(rel.replace(/\\/g, '/') + '/');
         } else {
-            files.add(rel);
+            result.add(rel.replace(/\\/g, '/'));
         }
     }
 
-    return { dirPaths: [...dirs].sort(), filePaths: [...files].sort() };
+    return [...result].sort();
 }
 
 // ── Presets Quick Pick ──────────────────────────────────────
@@ -241,10 +224,10 @@ async function createCustomPreset(): Promise<void> {
     const selection = await pickFilesForCustomPreset(allFiles);
     if (!selection) { return; }
 
-    await savePresetWithFiles(selection.files, 'Preset name for watched files', selection.dirs);
+    await savePresetWithFiles(selection.paths, 'Preset name for watched files');
 }
 
-async function savePresetWithFiles(files: string[], namePrompt: string, dirs?: string[]): Promise<void> {
+async function savePresetWithFiles(paths: string[], namePrompt: string): Promise<void> {
     if (!repoRoot || !provider) { return; }
 
     const name = await vscode.window.showInputBox({
@@ -275,10 +258,10 @@ async function savePresetWithFiles(files: string[], namePrompt: string, dirs?: s
     });
 
     try {
-        const preset = createPreset(repoRoot, name, files, description ?? undefined, undefined, dirs);
+        const preset = createPreset(repoRoot, name, paths, description ?? undefined, undefined);
         await switchToPreset(preset.name);
-        const fileCount = preset.files.length;
-        const dirCount = (preset.dirs ?? []).length;
+        const fileCount = preset.fileCount;
+        const dirCount = preset.dirCount ?? 0;
         if (dirCount > 0) {
             vscode.window.showInformationMessage(
                 `XLens: Preset "${name}" saved — ${fileCount} file(s) · ${dirCount} tracked dir${dirCount !== 1 ? 's' : ''}.`,
@@ -434,10 +417,16 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             if (!repoRoot || !provider) { return; }
 
             const nodes: TreeNode[] = selected && selected.length > 0 ? selected : [clicked];
-            // Folders → tracked directories (stable). Files → explicit tracked paths.
-            const dirPaths = nodes.filter(n => n.type === 'folder').map(n => n.relativePath);
-            const filePaths = collectFilePathsFromNodes(nodes.filter(n => n.type === 'file'));
-            if (dirPaths.length === 0 && filePaths.length === 0) {
+            // Folders → tracked directories (trailing `/`). Files → explicit tracked paths.
+            const paths: string[] = [];
+            for (const n of nodes) {
+                if (n.type === 'folder') {
+                    paths.push(n.relativePath + '/');
+                } else {
+                    paths.push(n.relativePath);
+                }
+            }
+            if (paths.length === 0) {
                 vscode.window.showInformationMessage('XLens: Nothing to add.');
                 return;
             }
@@ -473,22 +462,14 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             }
 
             try {
-                if (filePaths.length > 0) {
-                    addFilesToPreset(repoRoot, targetPreset, filePaths);
-                }
-                if (dirPaths.length > 0) {
-                    addDirsToPreset(repoRoot, targetPreset, dirPaths);
-                }
+                addPathsToPreset(repoRoot, targetPreset, paths);
 
                 if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === targetPreset) {
                     await doRefresh();
                 }
 
-                const parts: string[] = [];
-                if (filePaths.length > 0) { parts.push(`${filePaths.length} file(s)`); }
-                if (dirPaths.length > 0) { parts.push(`${dirPaths.length} dir(s)`); }
                 vscode.window.showInformationMessage(
-                    `XLens: Added ${parts.join(' and ')} to preset "${targetPreset}".`,
+                    `XLens: Added ${paths.length} item(s) to preset "${targetPreset}".`,
                 );
             } catch (err) {
                 vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
@@ -498,9 +479,8 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             if (!repoRoot || !provider) { return; }
 
             const uris: vscode.Uri[] = selected && selected.length > 0 ? selected : [clicked];
-            // Directories → tracked dirs (stable); files → explicit tracked paths.
-            const { dirPaths, filePaths } = await collectPathsFromUris(uris, repoRoot);
-            if (dirPaths.length === 0 && filePaths.length === 0) {
+            const paths = await collectPathsFromUris(uris, repoRoot);
+            if (paths.length === 0) {
                 vscode.window.showInformationMessage('XLens: Nothing to add.');
                 return;
             }
@@ -523,29 +503,20 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
                 presetName: p.name,
             }));
 
-            const total = dirPaths.length + filePaths.length;
             const pick = await vscode.window.showQuickPick(picks, {
-                placeHolder: `Add ${total} item(s) to preset...`,
+                placeHolder: `Add ${paths.length} item(s) to preset...`,
             });
             if (!pick) { return; }
 
             try {
-                if (filePaths.length > 0) {
-                    addFilesToPreset(repoRoot, pick.presetName, filePaths);
-                }
-                if (dirPaths.length > 0) {
-                    addDirsToPreset(repoRoot, pick.presetName, dirPaths);
-                }
+                addPathsToPreset(repoRoot, pick.presetName, paths);
 
                 if (provider.getViewMode() === 'preset' && provider.getActivePresetName() === pick.presetName) {
                     await doRefresh();
                 }
 
-                const parts: string[] = [];
-                if (filePaths.length > 0) { parts.push(`${filePaths.length} file(s)`); }
-                if (dirPaths.length > 0) { parts.push(`${dirPaths.length} dir(s)`); }
                 vscode.window.showInformationMessage(
-                    `XLens: Added ${parts.join(' and ')} to preset "${pick.presetName}".`,
+                    `XLens: Added ${paths.length} item(s) to preset "${pick.presetName}".`,
                 );
             } catch (err) {
                 vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
@@ -567,9 +538,9 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
                 vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
                 return;
             }
-            const explicitSet = new Set(preset.files);
-            const trackedDirSet = new Set((preset.dirs ?? []) as string[]);
-            const trackedDirs = (preset.dirs ?? []).map((d: string) => d.endsWith('/') ? d : d + '/');
+            const explicitSet = new Set(extractFilePaths(preset.paths));
+            const trackedDirSet = new Set(extractDirPaths(preset.paths).map(d => d.slice(0, -1)));
+            const trackedDirs = extractDirPaths(preset.paths);
 
             // Folders: if the folder itself is a tracked dir, untrack it; otherwise pull
             // out the explicit (non-dir-derived) descendant files for removal.
@@ -609,19 +580,13 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             }
 
             try {
-                const removedFiles = [...new Set(filesToRemove)];
-                const removedDirs = [...new Set(dirsToUntrack)];
-                if (removedFiles.length > 0) {
-                    removeFilesFromPreset(repoRoot, activeName, removedFiles);
-                }
-                if (removedDirs.length > 0) {
-                    removeDirsFromPreset(repoRoot, activeName, removedDirs);
+                const toRemove = [...new Set([...filesToRemove, ...dirsToUntrack.map(d => d + '/')])];
+                if (toRemove.length > 0) {
+                    removePathsFromPreset(repoRoot, activeName, toRemove);
                 }
                 await doRefresh();
-                const parts: string[] = [];
-                if (removedFiles.length > 0) { parts.push(`${removedFiles.length} file(s)`); }
-                if (removedDirs.length > 0) { parts.push(`${removedDirs.length} dir(s)`); }
-                let msg = `XLens: Removed ${parts.join(' and ')} from preset "${activeName}".`;
+                const totalRemoved = toRemove.length;
+                let msg = `XLens: Removed ${totalRemoved} item(s) from preset "${activeName}".`;
                 if (dirCovered.length > 0) {
                     msg += ` ${dirCovered.length} file(s) covered by a tracked directory stayed.`;
                 }
@@ -867,8 +832,8 @@ async function doRefresh() {
                 // Resolve tracked directories to their current file set, then merge
                 // with explicit files. This is the key to handling renames/deletes:
                 // directories are re-expanded on every refresh.
-                const dirFiles = await expandDirsToTrackedFiles(repoRoot, preset.dirs ?? []);
-                const merged = new Set<string>(preset.files);
+                const dirFiles = await expandDirsToTrackedFiles(repoRoot, extractDirPaths(preset.paths));
+                const merged = new Set<string>(extractFilePaths(preset.paths));
                 for (const f of dirFiles) { merged.add(f); }
                 provider.setPresetResolvedFiles([...merged].sort());
             } catch { /* ignore */ }

@@ -10,8 +10,8 @@ export interface FileTreeNode {
 }
 
 export interface PresetSelection {
-    files: string[];
-    dirs: string[];
+    /** Unified path list. Directories end with `/`, files don't. */
+    paths: string[];
 }
 
 export function buildFileTree(filePaths: string[]): FileTreeNode[] {
@@ -538,21 +538,18 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
       else toggleDir(node);
     }
 
-    function selectedItems() {
-      return {
-        files: [...checkedFiles].sort(),
-        dirs: [...checkedDirs].sort(),
-      };
+    function selectedPaths() {
+        const paths = [];
+        for (const f of checkedFiles) paths.push(f);
+        for (const d of checkedDirs) paths.push(d + '/');
+        return paths.sort();
     }
 
     function updateSummary() {
-      const sel = selectedItems();
-      const parts = [];
-      if (sel.files.length) parts.push(sel.files.length + ' file' + (sel.files.length !== 1 ? 's' : ''));
-      if (sel.dirs.length) parts.push(sel.dirs.length + ' dir' + (sel.dirs.length !== 1 ? 's' : ''));
-      const summary = parts.length ? parts.join(' · ') : '0 selected';
+      const paths = selectedPaths();
+      const summary = paths.length ? paths.length + ' item' + (paths.length !== 1 ? 's' : '') : '0 selected';
       document.getElementById('summary').textContent = summary;
-      document.getElementById('confirm').disabled = sel.files.length === 0 && sel.dirs.length === 0;
+      document.getElementById('confirm').disabled = paths.length === 0;
     }
 
     function indentGuides(depth) {
@@ -747,9 +744,9 @@ function getWebviewHtml(tree: FileTreeNode[], nonce: string): string {
 
     document.getElementById('cancel').onclick = () => vscode.postMessage({ type: 'cancel' });
     document.getElementById('confirm').onclick = () => {
-      const sel = selectedItems();
-      if (sel.files.length === 0 && sel.dirs.length === 0) return;
-      vscode.postMessage({ type: 'confirm', files: sel.files, dirs: sel.dirs });
+      const paths = selectedPaths();
+      if (paths.length === 0) return;
+      vscode.postMessage({ type: 'confirm', paths: paths });
     };
   </script>
 </body>
@@ -784,15 +781,14 @@ export async function openPresetPickerWebview(filePaths: string[]): Promise<Pres
         const nonce = String(Date.now());
         panel.webview.html = getWebviewHtml(tree, nonce);
 
-        panel.webview.onDidReceiveMessage((msg: { type: string; files?: string[]; dirs?: string[] }) => {
+        panel.webview.onDidReceiveMessage((msg: { type: string; paths?: string[] }) => {
             if (msg.type === 'confirm') {
-                const files = Array.isArray(msg.files) ? msg.files : [];
-                const dirs = Array.isArray(msg.dirs) ? msg.dirs : [];
-                if (files.length === 0 && dirs.length === 0) {
+                const paths = Array.isArray(msg.paths) ? msg.paths : [];
+                if (paths.length === 0) {
                     vscode.window.showWarningMessage('XLens: Nothing selected.');
                     return;
                 }
-                finish({ files, dirs });
+                finish({ paths });
             } else if (msg.type === 'cancel') {
                 finish(undefined);
             }
