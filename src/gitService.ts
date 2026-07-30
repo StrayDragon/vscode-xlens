@@ -34,7 +34,22 @@ export async function detectBaseBranch(repoRoot: string): Promise<string> {
             continue;
         }
     }
-    return 'master';
+
+    // No well-known branch found – try any local branch that is not the current HEAD
+    let currentBranch = '';
+    try {
+        currentBranch = (await execAsync('git rev-parse --abbrev-ref HEAD', repoRoot)).trim();
+    } catch { /* ignore */ }
+
+    const branches = await listBranches(repoRoot);
+    for (const b of branches) {
+        if (b !== currentBranch) {
+            return b;
+        }
+    }
+
+    // Only one branch exists – return it (or HEAD as last resort)
+    return branches.length > 0 ? branches[0] : (currentBranch || 'HEAD');
 }
 
 /** List all local branches in the repo. */

@@ -47,7 +47,7 @@ function getResolvedBaseBranch(preset?: { baseBranch?: string }): string {
         return preset.baseBranch;
     }
     const cfg = getConfig();
-    return cfg.baseBranch || detectedBaseBranch || 'master';
+    return cfg.baseBranch || detectedBaseBranch || 'HEAD';
 }
 
 async function setContextKey(key: string, value: boolean): Promise<void> {
