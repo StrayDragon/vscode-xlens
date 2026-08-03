@@ -39,6 +39,22 @@ git diff <base-branch> --name-status -- <workspace-prefix>
 
 基线分支按 master → main → develop → trunk 顺序自动检测，路径前缀从工作区相对 git root 的位置算。都留空就显示整个仓库的变更。
 
+## Range Review（区间评审）
+
+除了对比基线与工作区，XLens 支持在两个 ref 之间做区间评审：
+
+- 点击树视图标题栏的 `Select Diff Range` 按钮，或在 Change Base Branch / Set Range 选择器中选择 **Set Diff Range...**
+- 依次选择 **From**（基线）和 **To**（对比对象）两个 ref：支持本地 / 远程分支、tag、最近 commit，或直接输入 commit SHA
+- 默认值：From = 自动检测的基线分支（main/master），To = HEAD
+- 视图显示 `git diff <from> <to>` 的变更文件（默认 PR 式 three-dot 语义：`A...B` 只显示目标侧自分叉以来的变更；无共同祖先时自动回退为完整对比，可用 `xlens.gitDiffView.rangeDiffMode` 切换为 two-dot 完整差异）；文件右键 **Open Diff** 对比两个 ref 中的文件内容（重命名文件自动回退旧路径）
+- 文件节点显示 GitHub 风格的行数统计（如 `+12 −3`）
+- 视图标题显示当前 range（如 `XLens: v1.0.0 → v1.1.0`）；选择 **Clear Range** 恢复与基线分支的对比
+- range 随工作区持久化，下次打开自动恢复；range 中引用的 ref 失效（删除 / 强推）时自动回退并提示
+
+### Range Preset
+
+在 range 模式下保存 preset 时，当前 range 会一并存入 preset（Presets 选择器中显示 `range: A → B`）。激活该 preset 即可回顾当时评审的变更范围；回顾时重新选择 range 会同步更新该 preset 的 range。
+
 ## 配置
 
 | 配置项 | 默认值 | 说明 |
@@ -49,6 +65,7 @@ git diff <base-branch> --name-status -- <workspace-prefix>
 | `xlens.gitDiffView.refreshDebounce` | `2000` | 自动刷新防抖（毫秒） |
 | `xlens.gitDiffView.autoReveal` | `false` | 切换编辑器时自动在树中展开对应路径 |
 | `xlens.gitDiffView.statusDisplay` | `"badge"` | git 状态显示方式：`badge` / `description` / `hidden` |
+| `xlens.gitDiffView.rangeDiffMode` | `"three-dot"` | range 对比语义：`three-dot`（PR 式 `A...B`，默认）/ `two-dot`（完整差异 `A B`） |
 
 ## 命令
 
@@ -59,7 +76,8 @@ git diff <base-branch> --name-status -- <workspace-prefix>
 | Presets | XLens 树视图标题栏 |
 | Refresh (`xlens.gitDiffView.refresh`) | 树视图标题栏 |
 | Expand All (`xlens.gitDiffView.expandAll`) | 树视图标题栏 |
-| Change Base Branch | 树视图标题栏 |
+| Change Base Branch / Set Range | 树视图标题栏 |
+| Select Diff Range (`xlens.gitDiffView.selectRange`) | 树视图标题栏 |
 | Open Diff | 文件右键 |
 | Open File | 文件点击 / 右键 |
 | Copy Relative Path | 文件/文件夹右键 |
