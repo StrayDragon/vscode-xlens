@@ -3,10 +3,10 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { GitDiffTreeProvider } from './treeProvider';
-import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listBranches, listRepoFiles, expandDirsToTrackedFiles } from './gitService';
+import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listBranches, listRepoFiles, expandDirsToTrackedFiles, resolveRef, listTags, listRemoteBranches, listRecentCommits, DiffTarget } from './gitService';
 import { dirPaths as extractDirPaths, filePaths as extractFilePaths } from './types';
 import { GitStatusDecorationProvider } from './decorationProvider';
-import { TreeNode } from './types';
+import { TreeNode, Preset, DiffRange } from './types';
 import {
     listPresets,
     loadPreset,
@@ -16,6 +16,7 @@ import {
     addPathsToPreset,
     removePathsFromPreset,
     updatePresetDescription,
+    updatePresetRange,
 } from './presetService';
 import { readGitDiffViewConfig, affectsGitDiffViewConfiguration, updateGitDiffViewSetting, migrateLegacyGitDiffViewConfig } from './config';
 import { pickFilesForCustomPreset } from './presetPicker';
@@ -28,6 +29,8 @@ let treeView: vscode.TreeView<TreeNode> | undefined;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let repoRoot: string | undefined;
 let detectedBaseBranch: string | undefined;
+/** View-level two-ref range (workspace state). Only applies outside preset mode. */
+let diffRange: DiffRange | undefined;
 let configCache: Config | undefined;
 let contextRef: vscode.ExtensionContext | undefined;
 
@@ -41,13 +44,36 @@ function getConfig(): Config {
     return configCache ?? readConfig();
 }
 
-function getResolvedBaseBranch(preset?: { baseBranch?: string }): string {
-    // Preset base branch override
-    if (preset?.baseBranch) {
-        return preset.baseBranch;
+/** Load the currently active preset (if in preset mode). */
+function getActivePreset(): Preset | undefined {
+    if (!repoRoot || !provider || provider.getViewMode() !== 'preset') { return undefined; }
+    const name = provider.getActivePresetName();
+    if (!name) { return undefined; }
+    try {
+        return loadPreset(repoRoot, name);
+    } catch {
+        return undefined;
     }
+}
+
+/**
+ * Resolve the effective diff target.
+ * Priority: preset.range → preset.baseBranch → view-level range → config baseBranch → auto-detected → HEAD.
+ */
+function getResolvedDiffTarget(preset?: Preset): DiffTarget {
     const cfg = getConfig();
-    return cfg.baseBranch || detectedBaseBranch || 'HEAD';
+    if (preset) {
+        if (preset.range) {
+            return { kind: 'range', from: preset.range.from, to: preset.range.to, mode: cfg.rangeDiffMode };
+        }
+        if (preset.baseBranch) {
+            return { kind: 'base', ref: preset.baseBranch };
+        }
+    }
+    if (diffRange) {
+        return { kind: 'range', from: diffRange.from, to: diffRange.to, mode: cfg.rangeDiffMode };
+    }
+    return { kind: 'base', ref: cfg.baseBranch || detectedBaseBranch || 'HEAD' };
 }
 
 async function setContextKey(key: string, value: boolean): Promise<void> {
@@ -124,10 +150,15 @@ async function showPresetsQuickPick(): Promise<void> {
     // Presets
     for (const p of presets) {
         const isActive = isPresetMode && p.name === activeName;
+        const diffLabel = p.range
+            ? `range: ${p.range.from} → ${p.range.to}`
+            : p.baseBranch
+                ? `base: ${p.baseBranch}`
+                : 'default base';
         items.push({
             label: `$(${isActive ? 'pin' : 'circle-outline'}) ${p.name}`,
             description: p.description ? p.description.substring(0, 60) : `${p.fileCount} files${p.dirCount ? ` · ${p.dirCount} dir${p.dirCount !== 1 ? 's' : ''}` : ''}`,
-            detail: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} tracked dir${p.dirCount !== 1 ? 's' : ''}` : ''} · ${p.baseBranch ? `base: ${p.baseBranch}` : 'default base'}`,
+            detail: `${p.fileCount} file${p.fileCount !== 1 ? 's' : ''}${p.dirCount ? ` · ${p.dirCount} tracked dir${p.dirCount !== 1 ? 's' : ''}` : ''} · ${diffLabel}`,
             presetName: p.name,
         });
     }
@@ -258,7 +289,10 @@ async function savePresetWithFiles(paths: string[], namePrompt: string): Promise
     });
 
     try {
-        const preset = createPreset(repoRoot, name, paths, description ?? undefined, undefined);
+        const activePreset = getActivePreset();
+        const target = getResolvedDiffTarget(activePreset);
+        const range = target.kind === 'range' ? { from: target.from, to: target.to } : undefined;
+        const preset = createPreset(repoRoot, name, paths, description ?? undefined, undefined, range);
         await switchToPreset(preset.name);
         const fileCount = preset.fileCount;
         const dirCount = preset.dirCount ?? 0;
@@ -393,9 +427,170 @@ function updateViewTitle(): void {
     const activeName = provider.getActivePresetName();
     if (provider.getViewMode() === 'preset' && activeName) {
         treeView.title = `XLens: 📌 ${activeName}`;
+    } else if (diffRange) {
+        const truncate = (s: string, n: number) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+        treeView.title = `XLens: ${truncate(diffRange.from, 15)} → ${truncate(diffRange.to, 15)}`;
     } else {
         treeView.title = 'XLens';
     }
+}
+
+// ── Diff range helpers ────────────────────────────────────────
+
+async function clearViewRange(showMessage = true): Promise<void> {
+    diffRange = undefined;
+    await contextRef?.workspaceState.update('xlensDiffRange', undefined);
+    if (showMessage) {
+        vscode.window.showInformationMessage('XLens: Range cleared, back to live diff.');
+    }
+    doRefresh();
+    updateViewTitle();
+}
+
+/** Two-step ref picker: branches / tags / remote branches / recent commits / free input. */
+async function pickRef(prompt: string, current: string): Promise<string | undefined> {
+    if (!repoRoot) { return undefined; }
+
+    let branches: string[] = [];
+    let tags: string[] = [];
+    let remoteBranches: string[] = [];
+    let commits: { sha: string; subject: string }[] = [];
+    try {
+        [branches, tags, remoteBranches, commits] = await Promise.all([
+            listBranches(repoRoot),
+            listTags(repoRoot),
+            listRemoteBranches(repoRoot),
+            listRecentCommits(repoRoot, 15),
+        ]);
+    } catch (err) {
+        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+    }
+
+    type RefPickItem = vscode.QuickPickItem & { value?: string };
+    const items: RefPickItem[] = [];
+
+    items.push({ label: `$(check) ${current}`, description: 'current', value: current });
+
+    const localBranches = branches.filter(b => b !== current);
+    if (localBranches.length > 0) {
+        items.push({ label: 'Local branches', kind: vscode.QuickPickItemKind.Separator });
+        for (const b of localBranches) {
+            items.push({ label: b, value: b });
+        }
+    }
+
+    const visibleTags = tags.filter(t => t !== current).slice(0, 30);
+    if (visibleTags.length > 0) {
+        items.push({ label: 'Tags', kind: vscode.QuickPickItemKind.Separator });
+        for (const t of visibleTags) {
+            items.push({ label: t, value: t });
+        }
+    }
+
+    const visibleRemote = remoteBranches.filter(rb => rb !== current).slice(0, 30);
+    if (visibleRemote.length > 0) {
+        items.push({ label: 'Remote branches', kind: vscode.QuickPickItemKind.Separator });
+        for (const rb of visibleRemote) {
+            items.push({ label: rb, value: rb });
+        }
+    }
+
+    if (commits.length > 0) {
+        items.push({ label: 'Recent commits', kind: vscode.QuickPickItemKind.Separator });
+        for (const c of commits) {
+            items.push({ label: c.sha, description: c.subject, value: c.sha });
+        }
+    }
+
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: '$(symbol-method) Enter commit SHA / ref...', value: '__input__' });
+
+    const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: `${prompt} (current: ${current})`,
+        matchOnDescription: true,
+    });
+    if (!pick) { return undefined; }
+
+    if (pick.value === '__input__') {
+        const input = await vscode.window.showInputBox({
+            prompt: `${prompt}: branch name, tag, or commit SHA`,
+            placeHolder: 'e.g. main, v1.0.0, a1b2c3d',
+            validateInput: (val) => {
+                if (!val.trim()) { return 'Required'; }
+                if (!isValidBranchName(val.trim())) { return 'Invalid characters'; }
+                return undefined;
+            },
+        });
+        if (!input) { return undefined; }
+        return input.trim();
+    }
+
+    return pick.value;
+}
+
+/** Set / clear the view-level diff range (workspace state). */
+async function selectRangeFlow(): Promise<void> {
+    if (!repoRoot) { return; }
+
+    // Step 1: set or clear
+    const modeItems: (vscode.QuickPickItem & { action: 'set' | 'clear' })[] = [
+        {
+            label: '$(git-compare) Set Range...',
+            description: 'Compare two refs (branches / tags / commits)',
+            action: 'set',
+        },
+    ];
+    if (diffRange) {
+        modeItems.push({
+            label: '$(circle-outline) Clear Range (back to live diff)',
+            action: 'clear',
+        });
+    }
+    const modePick = await vscode.window.showQuickPick(modeItems, {
+        placeHolder: diffRange ? `Current range: ${diffRange.from} → ${diffRange.to}` : 'XLens: Diff Range',
+    });
+    if (!modePick) { return; }
+
+    if (modePick.action === 'clear') {
+        await clearViewRange();
+        return;
+    }
+
+    // Step 2: from ref
+    const from = await pickRef('From (base)', diffRange?.from ?? detectedBaseBranch ?? 'HEAD');
+    if (!from) { return; }
+
+    // Step 3: to ref
+    const to = await pickRef('To (compare)', diffRange?.to ?? 'HEAD');
+    if (!to) { return; }
+
+    // Validate both refs resolve to commits
+    try {
+        await resolveRef(repoRoot, from);
+        await resolveRef(repoRoot, to);
+    } catch (err) {
+        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+
+    diffRange = { from, to };
+    await contextRef?.workspaceState.update('xlensDiffRange', diffRange);
+
+    // When an active preset carries a range, keep it in sync (edit-on-recall flow)
+    const activeName = provider?.getActivePresetName();
+    if (activeName) {
+        try {
+            const preset = loadPreset(repoRoot, activeName);
+            if (preset.range) {
+                updatePresetRange(repoRoot, activeName, diffRange);
+                vscode.window.showInformationMessage(`XLens: Preset "${activeName}" range updated to ${from} → ${to}.`);
+            }
+        } catch { /* ignore */ }
+    }
+
+    doRefresh();
+    updateViewTitle();
 }
 
 // ── Activate ────────────────────────────────────────────────
@@ -597,9 +792,52 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
         }),
         vscode.commands.registerCommand('xlens.gitDiffView.openDiff', async (node: TreeNode) => {
             if (!repoRoot || node.type !== 'file') { return; }
-            const baseBranch = getResolvedBaseBranch();
+            const target = getResolvedDiffTarget(getActivePreset());
             const currentPath = path.join(repoRoot, node.relativePath);
 
+            if (target.kind === 'range') {
+                // Range mode: diff <from> ↔ <to> via two temp files
+                let fromSha: string;
+                let toSha: string;
+                try {
+                    fromSha = await resolveRef(repoRoot, target.from);
+                    toSha = await resolveRef(repoRoot, target.to);
+                } catch (err) {
+                    vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+                    return;
+                }
+
+                // From side: try the new path first, fall back to oldPath for renames
+                const fromCandidates = node.status === 'R' && node.oldPath
+                    ? [node.relativePath, node.oldPath]
+                    : [node.relativePath];
+                let fromContent = '';
+                for (const p of fromCandidates) {
+                    try {
+                        fromContent = await execAsync(`git show ${fromSha}:${p}`, repoRoot);
+                        break;
+                    } catch { /* try next candidate */ }
+                }
+                let toContent = '';
+                try {
+                    toContent = await execAsync(`git show ${toSha}:${node.relativePath}`, repoRoot);
+                } catch {
+                    // File added in this range (or deleted on the from side) — empty side is fine
+                }
+
+                fs.mkdirSync(TEMP_DIR, { recursive: true });
+                const safeName = node.relativePath.replace(/[\/\\]/g, '_');
+                const fromPath = path.join(TEMP_DIR, `${target.from}...${safeName}`);
+                const toPath = path.join(TEMP_DIR, `${target.to}...${safeName}`);
+                fs.writeFileSync(fromPath, fromContent);
+                fs.writeFileSync(toPath, toContent);
+
+                const title = `${node.relativePath} (${target.from} ↔ ${target.to})`;
+                vscode.commands.executeCommand('vscode.diff', vscode.Uri.file(fromPath), vscode.Uri.file(toPath), title).then(undefined, () => {});
+                return;
+            }
+
+            const baseBranch = target.ref;
             let baseContent: string;
             try {
                 baseContent = await execAsync(
@@ -633,25 +871,64 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             vscode.env.clipboard.writeText(node.relativePath);
             vscode.window.showInformationMessage(`Copied: ${node.relativePath}`);
         }),
+        vscode.commands.registerCommand('xlens.gitDiffView.selectRange', () => selectRangeFlow()),
         vscode.commands.registerCommand('xlens.gitDiffView.changeBaseBranch', async () => {
-            const current = getResolvedBaseBranch();
+            const target = getResolvedDiffTarget(getActivePreset());
+            const currentLabel = target.kind === 'range' ? `${target.from} → ${target.to}` : target.ref;
             if (!repoRoot) { return; }
             const branches = await listBranches(repoRoot);
-            // Ensure current branch is in the list
-            if (!branches.includes(current)) {
-                branches.unshift(current);
-            }
-            const picks = branches.map(b => ({
-                label: b,
-                description: b === current ? '$(check) current' : '',
-            }));
-            const input = await vscode.window.showQuickPick(picks, {
-                placeHolder: `Current: ${current}. Select base branch...`,
+
+            type BasePickItem = vscode.QuickPickItem & { branch?: string; action?: 'range' | 'clear' };
+            const items: BasePickItem[] = [];
+
+            // Range actions at the top — "change base branch OR pick a two-ref range"
+            items.push({
+                label: '$(git-compare) Set Diff Range...',
+                description: 'Compare two refs (branches / tags / commits)',
+                action: 'range',
             });
-            if (input && input.label !== current) {
-                detectedBaseBranch = input.label;
-                await updateGitDiffViewSetting('baseBranch', input.label);
+            if (diffRange) {
+                items.push({
+                    label: `$(circle-outline) Clear Range (${diffRange.from} → ${diffRange.to})`,
+                    description: 'Back to live diff',
+                    action: 'clear',
+                });
+            }
+            items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+
+            // Ensure current target label is listed
+            if (target.kind === 'base' && !branches.includes(currentLabel)) {
+                branches.unshift(currentLabel);
+            }
+            for (const b of branches) {
+                items.push({
+                    label: b,
+                    description: b === currentLabel ? '$(check) current' : '',
+                    branch: b,
+                });
+            }
+
+            const input = await vscode.window.showQuickPick(items, {
+                placeHolder: `Current: ${currentLabel}. Select diff target...`,
+            });
+            if (!input) { return; }
+
+            if (input.action === 'range') {
+                await selectRangeFlow();
+                return;
+            }
+            if (input.action === 'clear') {
+                await clearViewRange();
+                return;
+            }
+            if (input.branch && input.branch !== currentLabel) {
+                // Picking a single base branch exits range mode
+                diffRange = undefined;
+                await contextRef?.workspaceState.update('xlensDiffRange', undefined);
+                detectedBaseBranch = input.branch;
+                await updateGitDiffViewSetting('baseBranch', input.branch);
                 doRefresh();
+                updateViewTitle();
             }
         }),
         vscode.commands.registerCommand('xlens.gitDiffView.newFile', async (node: TreeNode) => {
@@ -727,6 +1004,12 @@ export async function activate(context: vscode.ExtensionContext) {
     decorationProvider.setDisplayMode(configCache.statusDisplay);
 
     detectedBaseBranch = await detectBaseBranch(repoRoot);
+
+    // Restore view-level diff range from workspace state
+    const savedRange = context.workspaceState.get<DiffRange>('xlensDiffRange');
+    if (savedRange?.from && savedRange?.to) {
+        diffRange = savedRange;
+    }
 
     treeView = vscode.window.createTreeView('gitDiffExplorerView', {
         treeDataProvider: provider,
@@ -830,30 +1113,47 @@ async function doRefresh() {
         const cfg = getConfig();
 
         // Load preset once if in preset mode (avoid double-load)
-        let presetBaseBranch: string | undefined;
+        let activePreset: Preset | undefined;
         if (provider.getViewMode() === 'preset' && provider.getActivePresetName()) {
             try {
-                const preset = loadPreset(repoRoot, provider.getActivePresetName()!);
-                presetBaseBranch = preset.baseBranch;
+                activePreset = loadPreset(repoRoot, provider.getActivePresetName()!);
                 // Resolve tracked directories to their current file set, then merge
                 // with explicit files. This is the key to handling renames/deletes:
                 // directories are re-expanded on every refresh.
-                const dirFiles = await expandDirsToTrackedFiles(repoRoot, extractDirPaths(preset.paths));
-                const merged = new Set<string>(extractFilePaths(preset.paths));
+                const dirFiles = await expandDirsToTrackedFiles(repoRoot, extractDirPaths(activePreset.paths));
+                const merged = new Set<string>(extractFilePaths(activePreset.paths));
                 for (const f of dirFiles) { merged.add(f); }
                 provider.setPresetResolvedFiles([...merged].sort());
             } catch { /* ignore */ }
         }
 
-        let baseBranch = getResolvedBaseBranch(presetBaseBranch ? { baseBranch: presetBaseBranch } : undefined);
-        // Validate the branch exists; if not, fall back to auto-detection
-        if (!isValidBranchName(baseBranch)) {
-            baseBranch = 'HEAD';
+        let target = getResolvedDiffTarget(activePreset);
+        // Validate refs; fall back gracefully when stale (deleted/force-pushed refs)
+        if (target.kind === 'range') {
+            try {
+                await resolveRef(repoRoot, target.from);
+                await resolveRef(repoRoot, target.to);
+            } catch {
+                if (activePreset?.range) {
+                    vscode.window.showWarningMessage(
+                        `XLens: Range ${target.from} → ${target.to} of preset "${activePreset.name}" is no longer valid.`,
+                    );
+                    target = { kind: 'base', ref: activePreset.baseBranch || detectedBaseBranch || 'HEAD' };
+                } else {
+                    vscode.window.showWarningMessage(
+                        `XLens: Range ${target.from} → ${target.to} is no longer valid, falling back to live diff.`,
+                    );
+                    await clearViewRange(false);
+                    target = getResolvedDiffTarget(activePreset);
+                }
+            }
+        } else if (!isValidBranchName(target.ref)) {
+            target = { kind: 'base', ref: 'HEAD' };
         } else {
             try {
-                await execAsync(`git rev-parse --verify ${baseBranch}`, repoRoot);
+                await execAsync(`git rev-parse --verify ${target.ref}`, repoRoot);
             } catch {
-                baseBranch = detectedBaseBranch || 'HEAD';
+                target = { kind: 'base', ref: detectedBaseBranch || 'HEAD' };
             }
         }
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -862,7 +1162,7 @@ async function doRefresh() {
         const workspacePath = workspaceFolders[0].uri.fsPath;
         const filterPrefix = getFilterPrefix(workspacePath, repoRoot, cfg.filterPrefix);
 
-        const entries = await getDiffEntries(repoRoot, baseBranch, filterPrefix);
+        const entries = await getDiffEntries(repoRoot, target, filterPrefix);
         provider.refresh(entries);
         decorationProvider?.updateStatuses(provider.getStatusMap());
         updateViewTitle();
@@ -884,6 +1184,7 @@ export function deactivate() {
     configCache = undefined;
     repoRoot = undefined;
     detectedBaseBranch = undefined;
+    diffRange = undefined;
     contextRef = undefined;
     try {
         fs.rmSync(TEMP_DIR, { recursive: true, force: true });

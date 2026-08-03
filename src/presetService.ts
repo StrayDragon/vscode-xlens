@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { Preset, PresetMeta, isDirPath, filePaths, dirPaths } from './types';
+import { Preset, PresetMeta, DiffRange, isDirPath, filePaths, dirPaths } from './types';
 
 const PRESET_DIR = '.xlens/preset';
 
@@ -69,6 +69,7 @@ export function listPresets(repoRoot: string): PresetMeta[] {
                 fileCount: filePaths(paths).length,
                 dirCount: dirPaths(paths).length,
                 baseBranch: typeof raw.baseBranch === 'string' ? raw.baseBranch : undefined,
+                range: normalizeRange(raw.range),
                 createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
                 updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
             });
@@ -101,6 +102,7 @@ export function loadPreset(repoRoot: string, name: string): Preset {
         fileCount: filePaths(paths).length,
         dirCount: dirPaths(paths).length,
         baseBranch: typeof raw.baseBranch === 'string' ? raw.baseBranch : undefined,
+        range: normalizeRange(raw.range),
         createdAt: String(raw.createdAt ?? new Date().toISOString()),
         updatedAt: String(raw.updatedAt ?? new Date().toISOString()),
     } as Preset;
@@ -127,6 +129,7 @@ export function savePreset(repoRoot: string, preset: Preset): void {
 
 /**
  * Create a new preset.
+ * `baseBranch` and `range` are mutually exclusive — providing `range` clears `baseBranch`.
  */
 export function createPreset(
     repoRoot: string,
@@ -134,6 +137,7 @@ export function createPreset(
     paths: string[],
     description?: string,
     baseBranch?: string,
+    range?: DiffRange,
 ): Preset {
     const sanitized = sanitizePresetName(name);
     const now = new Date().toISOString();
@@ -142,7 +146,8 @@ export function createPreset(
         name: sanitized,
         description: description ?? '',
         paths: normalised,
-        baseBranch,
+        baseBranch: range ? undefined : baseBranch,
+        range,
         fileCount: filePaths(normalised).length,
         dirCount: dirPaths(normalised).length,
         createdAt: now,
@@ -283,12 +288,47 @@ export function updatePresetDescription(repoRoot: string, presetName: string, de
 
 /**
  * Update the base branch of a preset.
+ * Setting a base branch clears any stored range (mutually exclusive).
  */
 export function updatePresetBaseBranch(repoRoot: string, presetName: string, baseBranch: string | undefined): Preset {
     const preset = loadPreset(repoRoot, presetName);
     preset.baseBranch = baseBranch;
+    if (baseBranch) {
+        preset.range = undefined;
+    }
     savePreset(repoRoot, preset);
     return preset;
+}
+
+/**
+ * Update the diff range of a preset.
+ * Setting a range clears any stored base branch (mutually exclusive).
+ */
+export function updatePresetRange(repoRoot: string, presetName: string, range: DiffRange | undefined): Preset {
+    const preset = loadPreset(repoRoot, presetName);
+    preset.range = range;
+    if (range) {
+        preset.baseBranch = undefined;
+    }
+    savePreset(repoRoot, preset);
+    return preset;
+}
+
+/**
+ * Validate and normalize a stored `range` field from raw preset JSON.
+ * Returns undefined when missing or malformed.
+ */
+function normalizeRange(raw: unknown): DiffRange | undefined {
+    if (typeof raw !== 'object' || raw === null) {
+        return undefined;
+    }
+    const r = raw as Record<string, unknown>;
+    const from = typeof r.from === 'string' ? r.from : '';
+    const to = typeof r.to === 'string' ? r.to : '';
+    if (!from || !to) {
+        return undefined;
+    }
+    return { from, to };
 }
 
 /**

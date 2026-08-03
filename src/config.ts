@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { StatusDisplayMode } from './types';
+import { RangeDiffMode } from './gitService';
 
 /** Current XLens git diff view settings namespace */
 export const XLENS_GIT_DIFF_VIEW_SECTION = 'xlens.gitDiffView';
@@ -14,6 +15,7 @@ const CONFIG_KEYS = [
     'refreshDebounce',
     'autoReveal',
     'statusDisplay',
+    'rangeDiffMode',
 ] as const;
 
 export interface GitDiffViewConfig {
@@ -23,6 +25,7 @@ export interface GitDiffViewConfig {
     baseBranch: string;
     filterPrefix: string;
     statusDisplay: StatusDisplayMode;
+    rangeDiffMode: RangeDiffMode;
 }
 
 export async function migrateLegacyGitDiffViewConfig(
@@ -66,6 +69,7 @@ export function readGitDiffViewConfig(): GitDiffViewConfig {
         baseBranch: config.get<string>('baseBranch', ''),
         filterPrefix: config.get<string>('filterPrefix', ''),
         statusDisplay: config.get<StatusDisplayMode>('statusDisplay', 'badge'),
+        rangeDiffMode: config.get<RangeDiffMode>('rangeDiffMode', 'three-dot'),
     };
 }
 

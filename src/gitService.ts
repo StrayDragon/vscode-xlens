@@ -14,7 +14,15 @@ export function execAsync(command: string, cwd: string): Promise<string> {
     });
 }
 
-const SAFE_BRANCH_RE = /^[a-zA-Z0-9._\-\/]+$/;
+const SAFE_BRANCH_RE = /^[a-zA-Z0-9._\-\/@]+$/;
+
+/** Diff semantics for range review: PR-style three-dot (default) or full two-dot. */
+export type RangeDiffMode = 'three-dot' | 'two-dot';
+
+/** Diff target for the XLens view: single base ref (working tree vs ref) or two-ref range. */
+export type DiffTarget =
+    | { kind: 'base'; ref: string }
+    | { kind: 'range'; from: string; to: string; mode?: RangeDiffMode };
 
 export function isValidBranchName(branch: string): boolean {
     return SAFE_BRANCH_RE.test(branch) && !branch.includes('..');
@@ -60,6 +68,59 @@ export async function listBranches(repoRoot: string): Promise<string[]> {
     return output.split('\n').map(s => s.trim()).filter(s => s && !s.startsWith('(') && !s.startsWith('* '));
 }
 
+/** List all tags, version-sorted (v1.10 sorts after v1.9). */
+export async function listTags(repoRoot: string): Promise<string[]> {
+    const output = await execAsync(`git tag --sort=-version:refname`, repoRoot);
+    if (!output) { return []; }
+    return output.split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+/** List all remote-tracking branches, e.g. `origin/main`. Excludes `origin/HEAD`. */
+export async function listRemoteBranches(repoRoot: string): Promise<string[]> {
+    const output = await execAsync(`git branch -r --format='%(refname:short)'`, repoRoot);
+    if (!output) { return []; }
+    return output.split('\n').map(s => s.trim())
+        .filter(s => s && !s.endsWith('/HEAD') && !s.includes('HEAD ->'));
+}
+
+/** Recent commits as `{ sha, subject }`, newest first. */
+export async function listRecentCommits(repoRoot: string, n = 15): Promise<{ sha: string; subject: string }[]> {
+    const output = await execAsync(`git log -n ${n} --format=%h%x1f%s`, repoRoot);
+    if (!output) { return []; }
+    return output.split('\n')
+        .map(line => {
+            const idx = line.indexOf('\x1f');
+            if (idx < 0) { return undefined; }
+            return { sha: line.slice(0, idx).trim(), subject: line.slice(idx + 1).trim() };
+        })
+        .filter((c): c is { sha: string; subject: string } => !!c && !!c.sha);
+}
+
+/**
+ * Resolve any ref (branch / tag / commit SHA) to a full commit SHA.
+ * Throws when the ref is invalid, unsafe, or not a commit.
+ */
+export async function resolveRef(repoRoot: string, ref: string): Promise<string> {
+    if (!isValidBranchName(ref)) {
+        throw new Error(`Invalid ref: ${ref}`);
+    }
+    const output = await execAsync(`git rev-parse --verify --quiet ${ref}^{commit}`, repoRoot);
+    if (!output) {
+        throw new Error(`Ref not found: ${ref}`);
+    }
+    return output.trim();
+}
+
+/** Merge base of two refs, or undefined when they share no common ancestor. */
+export async function getMergeBase(repoRoot: string, from: string, to: string): Promise<string | undefined> {
+    try {
+        const out = await execAsync(`git merge-base ${from} ${to}`, repoRoot);
+        return out || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export function getFilterPrefix(
     workspacePath: string,
     repoRoot: string,
@@ -85,14 +146,32 @@ function parseGitStatus(raw: string): GitFileStatus | undefined {
 
 export async function getDiffEntries(
     repoRoot: string,
-    baseBranch: string,
+    target: DiffTarget,
     filterPrefix: string,
 ): Promise<DiffEntry[]> {
-    if (!isValidBranchName(baseBranch)) {
-        throw new Error(`Invalid branch name: ${baseBranch}`);
+    let cmd: string;
+    if (target.kind === 'range') {
+        // Resolve to full SHAs first — safe interpolation and consistent with `git show`.
+        const fromSha = await resolveRef(repoRoot, target.from);
+        const toSha = await resolveRef(repoRoot, target.to);
+        if (target.mode !== 'two-dot') {
+            // PR-style three-dot: changes on `to` since it diverged from `from`.
+            // Falls back to two-dot when there is no merge base (unrelated histories).
+            const mergeBase = await getMergeBase(repoRoot, fromSha, toSha);
+            if (mergeBase) {
+                cmd = `git -c core.quotePath=false diff ${fromSha}...${toSha} --raw --numstat`;
+            } else {
+                cmd = `git -c core.quotePath=false diff ${fromSha} ${toSha} --raw --numstat`;
+            }
+        } else {
+            cmd = `git -c core.quotePath=false diff ${fromSha} ${toSha} --raw --numstat`;
+        }
+    } else {
+        if (!isValidBranchName(target.ref)) {
+            throw new Error(`Invalid ref: ${target.ref}`);
+        }
+        cmd = `git -c core.quotePath=false diff ${target.ref} --raw --numstat`;
     }
-
-    let cmd = `git -c core.quotePath=false diff ${baseBranch} --name-status`;
     if (filterPrefix) {
         cmd += ` -- ${filterPrefix}`;
     }
@@ -102,24 +181,45 @@ export async function getDiffEntries(
         return [];
     }
 
-    const entries: DiffEntry[] = [];
-    const lines = output.split('\n');
-
-    for (const line of lines) {
+    // raw lines:     :<oldmode> <newmode> <oldsha> <newsha> <status>\t<path>
+    //                (renames/copies: ... <status>\t<old>\t<new>, status like `R100`)
+    // numstat lines: <add>\t<del>\t<path>          (renames: <add>\t<del>\t<old>\t<new>)
+    // Collect numstat first — raw lines precede numstat lines in the output.
+    const numstatByPath = new Map<string, { additions: number; deletions: number }>();
+    for (const line of output.split('\n')) {
         if (!line.trim()) { continue; }
         const parts = line.split('\t');
-        if (parts.length < 2) { continue; }
+        if (/^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1] ?? '')) {
+            // Renames/copies report 4 columns; the last one is the new path
+            const path = parts.length >= 4 ? parts[3] : parts[2];
+            numstatByPath.set(path, { additions: Number(parts[0]), deletions: Number(parts[1]) });
+        }
+        // binary files emit `-\t-` numstat lines — skipped here, status still comes from raw
+    }
 
-        const statusCode = parseGitStatus(parts[0]);
+    const entries: DiffEntry[] = [];
+    for (const line of output.split('\n')) {
+        if (!line.trim()) { continue; }
+        const parts = line.split('\t');
+        if (!parts[0].startsWith(':')) { continue; }
+        // raw status line
+        const meta = parts[0].split(' ');
+        const rawStatus = meta[4] ?? '';
+        const statusCode = parseGitStatus(rawStatus.charAt(0));
         if (!statusCode) { continue; }
 
-        if (statusCode === 'R' && parts.length >= 3) {
-            entries.push({ status: 'R', path: parts[2], oldPath: parts[1] });
-        } else if (statusCode === 'C' && parts.length >= 3) {
-            entries.push({ status: 'C', path: parts[2], oldPath: parts[1] });
+        let entry: DiffEntry;
+        if ((statusCode === 'R' || statusCode === 'C') && parts.length >= 3) {
+            entry = { status: statusCode, path: parts[2], oldPath: parts[1] };
         } else {
-            entries.push({ status: statusCode, path: parts[1] });
+            entry = { status: statusCode, path: parts[1] };
         }
+        const stat = numstatByPath.get(entry.path);
+        if (stat) {
+            entry.additions = stat.additions;
+            entry.deletions = stat.deletions;
+        }
+        entries.push(entry);
     }
 
     return entries;

@@ -293,6 +293,9 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
                         name: part,
                         relativePath: entry.path,
                         status: entry.status,
+                        oldPath: entry.oldPath,
+                        additions: entry.additions,
+                        deletions: entry.deletions,
                     };
                     current.children.set(part, node);
                     this.nodeByPath.set(entry.path, node);
@@ -364,13 +367,23 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
 
         const inPresetMode = this.viewMode === 'preset';
 
+        // Line stats (e.g. `+2 −1`) — GitHub-style, shown unless a status label occupies the slot
+        const hasNumstat = element.additions !== undefined && element.deletions !== undefined;
+        const numstatLabel = hasNumstat && (element.additions! + element.deletions! > 0)
+            ? `+${element.additions} −${element.deletions}`
+            : '';
+
         if (inPresetMode && element.isClean) {
             // Clean/unchanged files intentionally show no status label or badge;
             // they are visible in the tree because the preset tracks them.
             item.tooltip = 'Not changed from base branch (tracked by preset)';
             // Keep the file-type icon by NOT overriding iconPath — VS Code resolves it from resourceUri.
         } else if (this.displayMode === 'description') {
-            item.description = STATUS_LABELS[element.status];
+            item.description = numstatLabel
+                ? `${STATUS_LABELS[element.status]} · ${numstatLabel}`
+                : STATUS_LABELS[element.status];
+        } else if (numstatLabel) {
+            item.description = numstatLabel;
         }
 
         // iconPath intentionally not set for normal files — VS Code resolves file-type icon from resourceUri

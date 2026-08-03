@@ -10,6 +10,10 @@ export interface DiffEntry {
     status: GitFileStatus;
     path: string;
     oldPath?: string;
+    /** Line additions (from --numstat). Undefined when not collected. */
+    additions?: number;
+    /** Line deletions (from --numstat). Undefined when not collected. */
+    deletions?: number;
 }
 
 export interface FolderNode {
@@ -25,6 +29,12 @@ export interface FileNode {
     name: string;
     relativePath: string;
     status: GitFileStatus;
+    /** Original path for renamed/copied files. */
+    oldPath?: string;
+    /** Line additions (from --numstat). */
+    additions?: number;
+    /** Line deletions (from --numstat). */
+    deletions?: number;
     /** True when the file is in the active preset but has no live git status (clean/unchanged) */
     isClean?: boolean;
     /** True when the file is in the active preset but doesn't exist on disk */
@@ -39,9 +49,18 @@ export interface PresetMeta {
     fileCount: number;
     /** Number of directories tracked by the preset (resolved at view time). */
     dirCount?: number;
+    /** Single-ref base (live diff vs working tree). Mutually exclusive with `range`. */
     baseBranch?: string;
+    /** Two-ref range (range review diff between two commits). Mutually exclusive with `baseBranch`. */
+    range?: DiffRange;
     createdAt: string;
     updatedAt: string;
+}
+
+/** A two-ref diff range: `git diff <from> <to>` (branches, tags, or commits). */
+export interface DiffRange {
+    from: string;
+    to: string;
 }
 
 export interface Preset extends PresetMeta {

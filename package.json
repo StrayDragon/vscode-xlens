@@ -94,8 +94,13 @@
       },
       {
         "command": "xlens.gitDiffView.changeBaseBranch",
-        "title": "Change Base Branch",
+        "title": "Change Base Branch / Set Range",
         "icon": "$(git-branch)"
+      },
+      {
+        "command": "xlens.gitDiffView.selectRange",
+        "title": "Select Diff Range",
+        "icon": "$(git-compare)"
       },
       {
         "command": "xlens.gitDiffView.newFile",
@@ -132,6 +137,11 @@
         },
         {
           "command": "xlens.gitDiffView.changeBaseBranch",
+          "when": "view == gitDiffExplorerView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "xlens.gitDiffView.selectRange",
           "when": "view == gitDiffExplorerView",
           "group": "navigation@3"
         },
@@ -234,6 +244,19 @@
             "Hide git status indicators entirely"
           ],
           "description": "How XLens git diff view displays git status for changed files."
+        },
+        "xlens.gitDiffView.rangeDiffMode": {
+          "type": "string",
+          "default": "three-dot",
+          "enum": [
+            "three-dot",
+            "two-dot"
+          ],
+          "enumDescriptions": [
+            "PR-style: diff A...B, showing changes on the target side since it diverged from the base; falls back to a full diff when the refs share no common ancestor",
+            "Direct tree diff A B: the full difference between the two refs"
+          ],
+          "description": "Diff semantics for range review."
         }
       }
     }
