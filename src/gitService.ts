@@ -121,6 +121,41 @@ export async function getMergeBase(repoRoot: string, from: string, to: string): 
     }
 }
 
+/**
+ * Upstream tracking ref for HEAD (e.g. `origin/main`), or `undefined` when none is configured.
+ */
+export async function getUpstreamRef(repoRoot: string): Promise<string | undefined> {
+    try {
+        const out = (await execAsync(
+            'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}',
+            repoRoot,
+        )).trim();
+        if (!out || !isValidBranchName(out)) {
+            return undefined;
+        }
+        return out;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Upstream ref and how many commits HEAD is ahead of it.
+ * Returns `undefined` when the current branch has no upstream.
+ */
+export async function getCommitsAheadOfUpstream(
+    repoRoot: string,
+): Promise<{ upstream: string; ahead: number } | undefined> {
+    const upstream = await getUpstreamRef(repoRoot);
+    if (!upstream) {
+        return undefined;
+    }
+    // Safe: upstream already passed isValidBranchName (no `..` / shell metacharacters).
+    const out = (await execAsync(`git rev-list --count ${upstream}..HEAD`, repoRoot)).trim();
+    const ahead = Number.parseInt(out, 10);
+    return { upstream, ahead: Number.isFinite(ahead) ? ahead : 0 };
+}
+
 export function getFilterPrefix(
     workspacePath: string,
     repoRoot: string,

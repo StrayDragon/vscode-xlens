@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { GitDiffTreeProvider } from './treeProvider';
-import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listBranches, listRepoFiles, expandDirsToTrackedFiles, resolveRef, listTags, listRemoteBranches, listRecentCommits, DiffTarget } from './gitService';
+import { getGitRepoRoot, getFilterPrefix, getDiffEntries, detectBaseBranch, execAsync, isValidBranchName, listBranches, listRepoFiles, expandDirsToTrackedFiles, resolveRef, listTags, listRemoteBranches, listRecentCommits, getCommitsAheadOfUpstream, DiffTarget } from './gitService';
 import { dirPaths as extractDirPaths, filePaths as extractFilePaths } from './types';
 import { GitStatusDecorationProvider } from './decorationProvider';
 import { TreeNode, Preset, DiffRange } from './types';
@@ -529,6 +529,64 @@ async function pickRef(prompt: string, current: string): Promise<string | undefi
     return pick.value;
 }
 
+/** Persist a view-level range and keep an active preset's range in sync when it already has one. */
+async function applyViewRange(from: string, to: string): Promise<boolean> {
+    if (!repoRoot) { return false; }
+
+    try {
+        await resolveRef(repoRoot, from);
+        await resolveRef(repoRoot, to);
+    } catch (err) {
+        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+        return false;
+    }
+
+    diffRange = { from, to };
+    await contextRef?.workspaceState.update('xlensDiffRange', diffRange);
+
+    const activeName = provider?.getActivePresetName();
+    if (activeName) {
+        try {
+            const preset = loadPreset(repoRoot, activeName);
+            if (preset.range) {
+                updatePresetRange(repoRoot, activeName, diffRange);
+                vscode.window.showInformationMessage(`XLens: Preset "${activeName}" range updated to ${from} → ${to}.`);
+            }
+        } catch { /* ignore */ }
+    }
+
+    doRefresh();
+    updateViewTitle();
+    return true;
+}
+
+/** Set range to upstream → HEAD (local commits not yet pushed). */
+async function setUnpushedRange(): Promise<void> {
+    if (!repoRoot) { return; }
+
+    let info: { upstream: string; ahead: number } | undefined;
+    try {
+        info = await getCommitsAheadOfUpstream(repoRoot);
+    } catch (err) {
+        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+
+    if (!info) {
+        vscode.window.showErrorMessage(
+            'XLens: Current branch has no upstream tracking branch. Push with -u or set upstream first.',
+        );
+        return;
+    }
+
+    const ok = await applyViewRange(info.upstream, 'HEAD');
+    if (!ok) { return; }
+
+    if (info.ahead === 0) {
+        vscode.window.showInformationMessage('XLens: No unpushed commits (already in sync with upstream).');
+    }
+}
+
 /** Set / clear the view-level diff range (workspace state). */
 async function selectRangeFlow(): Promise<void> {
     if (!repoRoot) { return; }
@@ -565,32 +623,7 @@ async function selectRangeFlow(): Promise<void> {
     const to = await pickRef('To (compare)', diffRange?.to ?? 'HEAD');
     if (!to) { return; }
 
-    // Validate both refs resolve to commits
-    try {
-        await resolveRef(repoRoot, from);
-        await resolveRef(repoRoot, to);
-    } catch (err) {
-        vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-    }
-
-    diffRange = { from, to };
-    await contextRef?.workspaceState.update('xlensDiffRange', diffRange);
-
-    // When an active preset carries a range, keep it in sync (edit-on-recall flow)
-    const activeName = provider?.getActivePresetName();
-    if (activeName) {
-        try {
-            const preset = loadPreset(repoRoot, activeName);
-            if (preset.range) {
-                updatePresetRange(repoRoot, activeName, diffRange);
-                vscode.window.showInformationMessage(`XLens: Preset "${activeName}" range updated to ${from} → ${to}.`);
-            }
-        } catch { /* ignore */ }
-    }
-
-    doRefresh();
-    updateViewTitle();
+    await applyViewRange(from, to);
 }
 
 // ── Activate ────────────────────────────────────────────────
@@ -878,7 +911,7 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             if (!repoRoot) { return; }
             const branches = await listBranches(repoRoot);
 
-            type BasePickItem = vscode.QuickPickItem & { branch?: string; action?: 'range' | 'clear' };
+            type BasePickItem = vscode.QuickPickItem & { branch?: string; action?: 'range' | 'clear' | 'unpushed' };
             const items: BasePickItem[] = [];
 
             // Range actions at the top — "change base branch OR pick a two-ref range"
@@ -886,6 +919,11 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
                 label: '$(git-compare) Set Diff Range...',
                 description: 'Compare two refs (branches / tags / commits)',
                 action: 'range',
+            });
+            items.push({
+                label: '$(cloud-upload) Unpushed commits...',
+                description: 'Compare upstream → HEAD (local commits not yet pushed)',
+                action: 'unpushed',
             });
             if (diffRange) {
                 items.push({
@@ -915,6 +953,10 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
 
             if (input.action === 'range') {
                 await selectRangeFlow();
+                return;
+            }
+            if (input.action === 'unpushed') {
+                await setUnpushedRange();
                 return;
             }
             if (input.action === 'clear') {

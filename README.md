@@ -46,6 +46,7 @@ git diff <base-branch> --name-status -- <workspace-prefix>
 - 点击树视图标题栏的 `Select Diff Range` 按钮，或在 Change Base Branch / Set Range 选择器中选择 **Set Diff Range...**
 - 依次选择 **From**（基线）和 **To**（对比对象）两个 ref：支持本地 / 远程分支、tag、最近 commit，或直接输入 commit SHA
 - 默认值：From = 自动检测的基线分支（main/master），To = HEAD
+- 也可在 Change Base Branch 选择器中选 **Unpushed commits...**：一键设为 `upstream → HEAD`，查看当前分支尚未 push 的已提交变更（不含工作区未提交改动）；无 tracking branch 时报错，已与上游同步时仍进入 range 并提示
 - 视图显示 `git diff <from> <to>` 的变更文件（默认 PR 式 three-dot 语义：`A...B` 只显示目标侧自分叉以来的变更；无共同祖先时自动回退为完整对比，可用 `xlens.gitDiffView.rangeDiffMode` 切换为 two-dot 完整差异）；文件右键 **Open Diff** 对比两个 ref 中的文件内容（重命名文件自动回退旧路径）
 - 文件节点显示 GitHub 风格的行数统计（如 `+12 −3`）
 - 视图标题显示当前 range（如 `XLens: v1.0.0 → v1.1.0`）；选择 **Clear Range** 恢复与基线分支的对比

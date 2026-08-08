@@ -5,7 +5,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 
 import * as vscode from 'vscode';
-import { getDiffEntries, resolveRef, listTags, listRecentCommits } from '../gitService';
+import { getDiffEntries, resolveRef, listTags, listRecentCommits, getUpstreamRef, getCommitsAheadOfUpstream } from '../gitService';
 import {
     createPreset,
     loadPreset,
@@ -142,6 +142,44 @@ suite('Extension Test Suite', () => {
             assert.ok(commits.length >= 2);
             assert.match(commits[0].sha, /^[0-9a-f]{7,}$/);
             assert.ok(commits[0].subject.length > 0);
+        });
+
+        test('getUpstreamRef / getCommitsAheadOfUpstream without upstream', async () => {
+            assert.strictEqual(await getUpstreamRef(repo), undefined);
+            assert.strictEqual(await getCommitsAheadOfUpstream(repo), undefined);
+        });
+
+        test('getCommitsAheadOfUpstream reports ahead count vs remote-tracking branch', async () => {
+            // Simulate a remote by cloning into a bare repo and pushing with -u.
+            const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'xlens-bare-'));
+            try {
+                runGit(bare, ['init', '-q', '--bare', '-b', 'main']);
+                runGit(repo, ['remote', 'add', 'origin', bare]);
+                runGit(repo, ['push', '-qu', 'origin', 'main']);
+
+                const synced = await getCommitsAheadOfUpstream(repo);
+                assert.ok(synced);
+                assert.strictEqual(synced!.upstream, 'origin/main');
+                assert.strictEqual(synced!.ahead, 0);
+
+                fs.writeFileSync(path.join(repo, 'push-me.txt'), 'local\n');
+                runGit(repo, ['add', '.']);
+                runGit(repo, ['commit', '-qm', 'unpushed']);
+
+                const ahead = await getCommitsAheadOfUpstream(repo);
+                assert.ok(ahead);
+                assert.strictEqual(ahead!.upstream, 'origin/main');
+                assert.strictEqual(ahead!.ahead, 1);
+
+                const entries = await getDiffEntries(
+                    repo,
+                    { kind: 'range', from: ahead!.upstream, to: 'HEAD' },
+                    '',
+                );
+                assert.ok(entries.some(e => e.path === 'push-me.txt' && e.status === 'A'));
+            } finally {
+                fs.rmSync(bare, { recursive: true, force: true });
+            }
         });
     });
 
