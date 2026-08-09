@@ -23,6 +23,14 @@ import { pickFilesForCustomPreset } from './presetPicker';
 
 const TEMP_DIR = path.join(os.tmpdir(), 'xlens-diff');
 
+/**
+ * Build a flat temp filename from path/ref segments.
+ * Refs like `origin/main` must not introduce nested directories under TEMP_DIR.
+ */
+function safeTempFileName(...segments: string[]): string {
+    return segments.map(s => s.replace(/[/\\:]/g, '_')).join('...');
+}
+
 let provider: GitDiffTreeProvider | undefined;
 let decorationProvider: GitStatusDecorationProvider | undefined;
 let treeView: vscode.TreeView<TreeNode> | undefined;
@@ -859,9 +867,8 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
                 }
 
                 fs.mkdirSync(TEMP_DIR, { recursive: true });
-                const safeName = node.relativePath.replace(/[\/\\]/g, '_');
-                const fromPath = path.join(TEMP_DIR, `${target.from}...${safeName}`);
-                const toPath = path.join(TEMP_DIR, `${target.to}...${safeName}`);
+                const fromPath = path.join(TEMP_DIR, safeTempFileName(target.from, node.relativePath));
+                const toPath = path.join(TEMP_DIR, safeTempFileName(target.to, node.relativePath));
                 fs.writeFileSync(fromPath, fromContent);
                 fs.writeFileSync(toPath, toContent);
 
@@ -886,8 +893,7 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             }
 
             fs.mkdirSync(TEMP_DIR, { recursive: true });
-            const safeName = node.relativePath.replace(/[\/\\]/g, '_');
-            const tempPath = path.join(TEMP_DIR, `${baseBranch}...${safeName}`);
+            const tempPath = path.join(TEMP_DIR, safeTempFileName(baseBranch, node.relativePath));
             fs.writeFileSync(tempPath, baseContent);
 
             const baseUri = vscode.Uri.file(tempPath);
