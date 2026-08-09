@@ -6,6 +6,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+- Fix: 点击 XLens 文件节点改用 `vscode.open`，与资源管理器一致地打开编辑器（此前自定义 openFile 在部分情况下无法跳转）
 - Fix: Open Diff 临时文件名会净化 ref 中的 `/`（如 `origin/main`），避免写成不存在的子目录导致 ENOENT
 - Change Base Branch 选择器新增 **Unpushed commits...**：一键将 range 设为 `upstream → HEAD`，查看当前分支尚未 push 的已提交变更；无 upstream 时报错，ahead=0 时仍进入 range 并提示已同步
 - Range Review 默认使用 PR 式 three-dot 语义（`A...B`）：分叉分支下只显示目标侧变更；无共同祖先时自动回退完整对比；可用 `xlens.gitDiffView.rangeDiffMode` 切换 two-dot

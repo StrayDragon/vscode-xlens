@@ -901,10 +901,20 @@ function registerAllCommands(context: vscode.ExtensionContext): void {
             const title = `${node.relativePath} (${baseBranch} ↔ Current)`;
             vscode.commands.executeCommand('vscode.diff', baseUri, currentUri, title).then(undefined, () => {});
         }),
-        vscode.commands.registerCommand('xlens.gitDiffView.openFile', (node?: TreeNode) => {
+        vscode.commands.registerCommand('xlens.gitDiffView.openFile', async (node?: TreeNode) => {
             if (!repoRoot || !node || node.type !== 'file') { return; }
             const filePath = path.join(repoRoot, node.relativePath);
-            vscode.window.showTextDocument(vscode.Uri.file(filePath));
+            if (node.status === 'D' || node.isMissing || !fs.existsSync(filePath)) {
+                vscode.window.showInformationMessage(
+                    `XLens: "${node.relativePath}" is not on disk (deleted or missing). Use Open Diff to view content.`,
+                );
+                return;
+            }
+            try {
+                await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(filePath));
+            } catch (err) {
+                vscode.window.showErrorMessage(`XLens: ${err instanceof Error ? err.message : String(err)}`);
+            }
         }),
         vscode.commands.registerCommand('xlens.gitDiffView.copyPath', (node: TreeNode) => {
             vscode.env.clipboard.writeText(node.relativePath);

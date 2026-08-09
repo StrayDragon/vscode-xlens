@@ -363,7 +363,8 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
             vscode.TreeItemCollapsibleState.None,
         );
         const filePath = path.join(this.repoRoot, element.relativePath);
-        item.resourceUri = vscode.Uri.file(filePath);
+        const fileUri = vscode.Uri.file(filePath);
+        item.resourceUri = fileUri;
 
         const inPresetMode = this.viewMode === 'preset';
 
@@ -401,11 +402,21 @@ export class GitDiffTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
             item.contextValue = `file_${statusSuffix}`;
         }
 
-        item.command = {
-            command: 'xlens.gitDiffView.openFile',
-            title: 'Open File',
-            arguments: [element],
-        };
+        // Prefer vscode.open so click follows workbench openMode / preview like Explorer.
+        // Deleted / missing paths need the custom command (show message or open from git).
+        if (element.status === 'D' || element.isMissing) {
+            item.command = {
+                command: 'xlens.gitDiffView.openFile',
+                title: 'Open File',
+                arguments: [element],
+            };
+        } else {
+            item.command = {
+                command: 'vscode.open',
+                title: 'Open File',
+                arguments: [fileUri],
+            };
+        }
         return item;
     }
 }
